@@ -28,7 +28,7 @@ class PlotConfig:
     selected_plots: List[str] = None
     figure_size: Tuple[int, int] = (5, 5)
     dpi: int = 150
-    cmap: Union[str, ListedColormap] = custom_cmap
+    cmap = custom_cmap
     def __post_init__(self):
         if self.selected_plots is None:
             self.selected_plots = ['embeddings', 'cluster_sizes']
