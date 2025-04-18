@@ -8,8 +8,8 @@
 [Shaden Alshammari](http://shadealsha.github.io),
 [John R. Hershey](https://research.google/people/john-hershey/),
 [Axel Feldmann](https://feldmann.nyc/),
-[William T. Freeman](https://billf.mit.edu/about/bio)
-[Mark Hamilton](https://mhamilton.net/),
+[William T. Freeman](https://billf.mit.edu/about/bio),
+[Mark Hamilton](https://mhamilton.net/)
 
 ![ICon Overview Graphic](https://mhamilton.net/images/periodic_table.svg)
 
