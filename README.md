@@ -2,7 +2,7 @@
 ###  ICLR 2025
 
 
-[![Website](https://img.shields.io/badge/ICon-%F0%9F%8C%90Website-purple?style=flat)](https://aka.ms/i-con) [![Website](https://img.shields.io/badge/ICon-%F0%9F%8C%90Paper-blue?style=flat)](https://aka.ms/icon-paper)  [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/11iYe8_nFoaQbFCXVQa-a4NJRQRVnV-9B?usp=sharing)
+[![Website](https://img.shields.io/badge/ICon-%F0%9F%8C%90Website-purple?style=flat)](https://aka.ms/i-con) [![Website](https://img.shields.io/badge/ICon-Paper-blue?style=flat)](https://aka.ms/icon-paper)  [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/11iYe8_nFoaQbFCXVQa-a4NJRQRVnV-9B?usp=sharing)
 
 
 [Shaden Alshammari](http://shadealsha.github.io),
