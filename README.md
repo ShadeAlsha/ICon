@@ -76,4 +76,4 @@ python train.py
 
 ## Contact
 
-For feedback, questions, or press inquiries please contact [Mark Hamilton](mailto:markth@mit.edu)
+For feedback, questions, or press inquiries please contact [Shaden Alshammari](mailto:shaden@mit.edu)
