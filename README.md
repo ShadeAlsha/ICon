@@ -2,7 +2,7 @@
 ###  ICLR 2025
 
 
-[![Website](https://img.shields.io/badge/ICon-%F0%9F%8C%90Website-purple?style=flat)](https://aka.ms/i-con) [![Website](https://img.shields.io/badge/ICon-Paper-blue?style=flat)]([https://aka.ms/icon-paper](https://openreview.net/pdf?id=WfaQrKCr4X))  | [Video](https://youtu.be/UvjTbnFzRac) 
+[Website](https://aka.ms/i-con) |  [Paper](https://openreview.net/pdf?id=WfaQrKCr4X)  | [Video](https://youtu.be/UvjTbnFzRac) | [MIT News](https://news.mit.edu/2025/machine-learning-periodic-table-could-fuel-ai-discovery-0423)
 
 
 [Shaden Alshammari](http://shadealsha.github.io),
