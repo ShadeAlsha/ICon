@@ -11,7 +11,7 @@
 [William T. Freeman](https://billf.mit.edu/about/bio),
 [Mark Hamilton](https://mhamilton.net/)
 
-![ICon Overview Graphic](https://mhamilton.net/images/periodic_table.svg)
+![ICon Overview Graphic](periodic_table.png)
 
 **TL;DR**: We introduce a single equation that unifies >20 machine learning methods into a periodic table. We use this framework to make a state-of-the-art unsupervised image classifier.
 
