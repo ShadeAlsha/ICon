@@ -18,51 +18,13 @@
 ## Contents
 <!--ts-->
    * [Install](#install)
-   * [Define Models](#define-model)
-   * [Train Models](#train-model)
-   * [Evaluate Models](#evaluate-models)
    * [Citation](#citation)
    * [Contact](#contact)
 <!--te-->
 
 ## Install
 
-To use ICon locally clone the repository:
-
-```shell script
-git clone https://github.com/ShadeAlsha/ICon.git
-cd ICon
-pip install -e .
-```
-
-
-## Defining Models
-
-
-
-## Evaluate Models
-
-```shell
-cd ICon
-python evaluate.py
-```
-
-After evaluation, see the results in tensorboard's hparams tab. 
-
-```shell
-cd ../logs/evaluate
-tensorboard --logdir .
-```
-
-Then visit [https://localhost:6006](https://localhost:6006) and click on hparams to browse results.
-
-
-## Train a Model
-
-```shell
-cd ICon
-python train.py
-```
+Usage and installation instructions coming soon!
 
 ## Citation
 
