@@ -35,7 +35,6 @@ Usage and installation instructions coming soon!
   booktitle={The Thirteenth International Conference on Learning Representations}
 }
 ```
-<iframe width="560" height="315" src="https://www.youtube.com/embed/UvjTbnFzRac" frameborder="0" allowfullscreen></iframe>
 
 ## Contact
 
