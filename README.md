@@ -30,7 +30,7 @@ Usage and installation instructions coming soon!
 
 ```
 @inproceedings{alshammariunifying,
-  title={A Unifying Framework for Representation Learning},
+  title={I-Con: A Unifying Framework for Representation Learning},
   author={Alshammari, Shaden Naif and Hershey, John R and Feldmann, Axel and Freeman, William T and Hamilton, Mark},
   booktitle={The Thirteenth International Conference on Learning Representations}
 }
