@@ -2,7 +2,7 @@
 ###  ICLR 2025
 
 
-[Website](https://aka.ms/i-con) |  [Paper](https://arxiv.org/pdf/2504.16929)  | [Video](https://youtu.be/UvjTbnFzRac) | [MIT News](https://news.mit.edu/2025/machine-learning-periodic-table-could-fuel-ai-discovery-0423)
+[Website](https://aka.ms/i-con) |  [Paper](https://arxiv.org/pdf/2504.16929) | [Video](https://youtu.be/UvjTbnFzRac) | [MIT News](https://news.mit.edu/2025/machine-learning-periodic-table-could-fuel-ai-discovery-0423)
 
 
 [Shaden Alshammari](http://shadealsha.github.io),
