@@ -11,15 +11,12 @@
 [William T. Freeman](https://billf.mit.edu/about/bio),
 [Mark Hamilton](https://mhamilton.net/)
 
-![ICon Overview Graphic](periodic_table.png)
+![ICon Overview Graphic](Perodic_table_light.png)
 
 **TL;DR**: We introduce a single equation that unifies >20 machine learning methods into a periodic table. We use this framework to make a state-of-the-art unsupervised image classifier. We open-source this API to let model creators and researchers quickly prototype new ML algorithms with as little as 5 lines of code.
 
 
-<video width="320" height="240" controls>
-  <source src="api_illustration.mp4" type="video/mp4">
-  Your browser does not support the video tag.
-</video>
+![Demo](api_illustration.gif)
 
 
 ## Contents
