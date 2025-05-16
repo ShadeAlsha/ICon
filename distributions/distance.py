@@ -118,7 +118,7 @@ class Gaussian(Kernel):
         else:
             affinities = F.softmax(logits, dim=1)
         return affinities
-
+ 
     def _compute_gaussian_probs(self, distances: torch.Tensor, sigma: torch.Tensor) -> torch.Tensor:
         """Compute Gaussian probabilities efficiently."""
         logits = -distances / (2 * sigma.view(-1, 1) ** 2)
