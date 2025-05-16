@@ -2,16 +2,16 @@ import torch
 import torch.nn as nn
 import pytorch_lightning as pl
 import torch.nn.functional as F
-from typing import Dict, Tuple, List, Union, Any
+from typing import Dict, Union, Any
 from .losses import KernelLoss
 from .ema import EMAUpdater
-from .model_config import IConConfig
+from .model_config import Config
 from .metrics import UnsupervisedAccuracy, Accuracy
 
-class IConModel(pl.LightningModule):
-    def __init__(self, config: IConConfig):
+class Model(pl.LightningModule):
+    def __init__(self, config: Config):
         super().__init__()
-        self.save_hyperparameters(ignore=['config'])
+        self.save_hyperparameters(config.to_loggable_dict())
         self.config = config
         self._setup_model()
         self._setup_metrics()
@@ -49,14 +49,13 @@ class IConModel(pl.LightningModule):
 
     def _setup_monitoring(self):
         self.automatic_optimization = not self.config.use_mixed_precision
-        self.validation_outputs = []
 
     def _compute_loss(self, batch) -> Dict[str, Any]:
         supervisory_distribution = self.supervisory_distribution(batch)
         mapper_output = self.mapper(batch) #dictionary
         batch.update(mapper_output)
         learned_distribution = self.learned_distribution(batch, return_log=self.config.log_icon_loss)
-        embeddings = batch.get('embeddings', None) 
+        embeddings = batch.get('embedding', None) 
         
         losses = {
             'icon_loss': self.kl_divergence(supervisory_distribution, learned_distribution, log=self.config.log_icon_loss),
@@ -69,15 +68,16 @@ class IConModel(pl.LightningModule):
         return {
             'losses': losses,
             'metrics': {
-                'embeddings': embeddings,
+                'embedding': embeddings,
                 'supervisory_distribution': supervisory_distribution,
                 'learned_distribution': torch.exp(learned_distribution) if self.config.log_icon_loss else learned_distribution,
                 'logits': self.linear_probe(embeddings),
-                'labels': batch.get('label', None),
+                'label': batch.get('label', None),
+                'index': batch.get('index', None),
             }
         }
 
-    def _compute_linear_probe_loss(self, embeddings: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
+    def _compute_linear_probe_loss(self, embeddings: Union[torch.Tensor, None], labels: torch.Tensor) -> torch.Tensor:
         if self.config.linear_probe:
             if embeddings is not None and labels is not None:
                 logits = self.linear_probe(embeddings.detach())
@@ -113,15 +113,15 @@ class IConModel(pl.LightningModule):
             raise ValueError(f"Optimizer {self.config.optimizer} not supported")
 
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=400)
-
-        return {
-            "optimizer": optimizer,
-            "lr_scheduler": {
-                "scheduler": scheduler,
-                "interval": "epoch",
-                "frequency": 1
-            }
-        }
+        return optimizer
+        #return {
+        #    "optimizer": optimizer,
+        #    "lr_scheduler": {
+        #        "scheduler": scheduler,
+        #        "interval": "epoch",
+        #        "frequency": 1
+        #    }
+        #}
 
     def training_step(self, batch, batch_idx: int) -> torch.Tensor:
         results = self._compute_loss(batch)
@@ -131,11 +131,34 @@ class IConModel(pl.LightningModule):
             optimizer = self.optimizers()
             optimizer.zero_grad()
             self.manual_backward(loss)
+
+            from collections import defaultdict
+
+            layer_grad_sums = defaultdict(list)
+            for name, param in self.named_parameters():
+                if param.grad is not None and 'linear_probe' not in name:
+                    # Use full module path minus the param name (e.g., remove '.weight' or '.bias')
+                    layer_name = ".".join(name.split('.')[:-1])
+                    layer_grad_sums[layer_name].append(param.grad.norm(2))
+
+            layer_grad_norms = {
+                layer: torch.norm(torch.stack(norms)) for layer, norms in layer_grad_sums.items() if norms
+            }
+
+            for layer, norm in layer_grad_norms.items():
+                self.log(f'grad_norm/{layer}', norm, prog_bar=False)
+
+            if layer_grad_norms:
+                total_norm = torch.norm(torch.stack(list(layer_grad_norms.values())))
+            else:
+                total_norm = torch.tensor(0.0, device=self.device)
+
+            self.grad_norm = total_norm
+
+
             if self.config.gradient_clip_val > 0:
-                self.grad_norm = torch.nn.utils.clip_grad_norm_(
-                    self.parameters(),
-                    self.config.gradient_clip_val
-                )
+                torch.nn.utils.clip_grad_norm_(self.parameters(), self.config.gradient_clip_val)
+
             optimizer.step()
 
         if self.config.use_ema:
@@ -144,7 +167,7 @@ class IConModel(pl.LightningModule):
         self._log_metrics('train', results, loss)
         return loss
 
-    def validation_step(self, batch: Tuple[torch.Tensor, ...], batch_idx: int) -> Dict:
+    def validation_step(self, batch, batch_idx: int) -> Dict:
         if self.config.use_ema:
             with self.ema.average_parameters():
                 results = self._compute_loss(batch)
@@ -155,13 +178,16 @@ class IConModel(pl.LightningModule):
         self._log_metrics('val', results, loss)
 
         metrics = results['metrics']
-        return {
-            'embeddings': metrics['embeddings'].detach().cpu(),
+        
+        summary = {
+            'embedding': metrics['embedding'].detach().cpu(),
             'logits': metrics['logits'].detach().cpu(),
-            'labels': metrics['labels'].detach().cpu(),
+            'index': metrics['index'].detach().cpu(),
+            'label': metrics['label'].detach().cpu(),
             'learned_distribution': results['metrics']['learned_distribution'].clip(1e-10).detach().cpu(),
             'supervisory_distribution': results['metrics']['supervisory_distribution'].clip(1e-10).detach().cpu(),
         }
+        return summary
 
     def on_train_epoch_end(self) -> None:
         if isinstance(self.train_acc, UnsupervisedAccuracy):
@@ -171,30 +197,12 @@ class IConModel(pl.LightningModule):
 
 
     def on_validation_epoch_end(self) -> None:
-        if not self.validation_outputs:
-            return
-
-        outputs = {}
-        keys = self.validation_outputs[0].keys()
-        for key in keys:
-            tensors = [batch[key] for batch in self.validation_outputs]
-            outputs[key] = torch.cat(tensors, dim=0)
-
-        self.aggregated_val_outputs = (
-            outputs['embeddings'],
-            outputs['logits'],
-            outputs['labels'],
-            outputs['learned_distribution'],
-            outputs['supervisory_distribution']
-        )
-
         if isinstance(self.val_acc, UnsupervisedAccuracy):
             accuracy = self.val_acc.compute()
             self.log('val_accuracy', accuracy, prog_bar=True)
             self.val_acc.reset()
 
-        # Clear stored outputs for next epoch
-        self.validation_outputs.clear()
+
 
 
     def _log_metrics(self, phase: str, results: Dict, loss: torch.Tensor) -> None:
@@ -204,15 +212,15 @@ class IConModel(pl.LightningModule):
 
         if accuracy_metric := getattr(self, f'{phase}_acc'):
             logits = results['metrics']['logits']
-            labels = results['metrics']['labels']
+            labels = results['metrics']['label']
             if isinstance(accuracy_metric, UnsupervisedAccuracy):
                 accuracy_metric.update(logits.argmax(dim=-1), labels)
             else:
                 accuracy_metric(logits.argmax(dim=-1), labels)
                 self.log(f'{phase}_accuracy', accuracy_metric, prog_bar=True)
 
-        if phase == 'train':
-            self.log('grad_norm', self.grad_norm)
+        if phase == 'train' and self.grad_norm is not None:
+            self.log('grad_norm', self.grad_norm, prog_bar=True)
 
         opts = self.optimizers()
         if not isinstance(opts, (list, tuple)):
