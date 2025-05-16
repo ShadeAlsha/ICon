@@ -82,7 +82,7 @@ class Augmentation(Kernel):
         **kwargs):
         """Initialize augmentation kernel with block pattern."""
         super().__init__(**kwargs)
-        self.label_kernel = Labell(**kwargs)
+        self.label_kernel = Label(**kwargs)
         self.label_kernel.normalize = False
         
         if block is not None:
