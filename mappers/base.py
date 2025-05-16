@@ -119,11 +119,12 @@ class SimpleCNN(WrappedMapper):
 from torchvision import models
 
 class ResNet(WrappedMapper):
-    def __init__(
+    def __init__(self,
         model_type="resnet50",
         small_image=False,
         input_key="image",
-        output_key="embeddings"
+        output_key="embedding",
+        feat_dim=256,    
     ):
         if model_type == "resnet18":
             model = models.resnet18(weights=None)
@@ -141,9 +142,17 @@ class ResNet(WrappedMapper):
             model.conv1 = nn.Conv2d(3, 64, 3, stride=1, padding=1, bias=False)
         model.maxpool = nn.Identity()
         model.fc = nn.Identity()
+        mlp = nn.Sequential(
+            nn.Linear(output_dim, output_dim),
+            nn.ReLU(),
+            nn.Linear(output_dim, feat_dim)
+        )
+        model.fc = mlp
 
         super().__init__(model, input_key=input_key, output_key=output_key)
-        self.output_dim = output_dim
+        self.output_dim = feat_dim
+    def forward_single(self, x):
+        return super().forward_single(x)
 
 class OneHotEncoder(BaseMapper):
     def __init__(
@@ -171,12 +180,14 @@ class LookUpTable(BaseMapper):
         normalize: bool = False,
         input_key: Union[str, List[str]] = "index",
         output_key: Union[str, List[str]] = "embedding",
-        init_weights: torch.Tensor = None
+        init_weights: torch.Tensor = None,
+        get_all: bool = False,
     ):
         model = nn.Embedding(num_embeddings=num_embeddings, embedding_dim=embedding_dim)
         super().__init__(model, input_key, output_key)
         self.normalize = normalize
         self._output_dim = embedding_dim
+        self.get_all = get_all
 
         if init_weights is not None:
             with torch.no_grad():
@@ -189,7 +200,10 @@ class LookUpTable(BaseMapper):
     def forward_single(self, x: torch.Tensor) -> torch.Tensor:
         if x.dim() == 2 and x.size(1) == 1:
             x = x.squeeze(1)
-        emb = self.model(x)
+        if self.get_all:
+            emb = self.model.weight
+        else:   
+            emb = self.model(x)
         if self.normalize:
             emb = F.normalize(emb, dim=1)
         return emb
@@ -220,7 +234,6 @@ class MLPMapper(WrappedMapper):
         super().__init__(model, input_key=input_key, output_key=output_key, normalize=normalize)
 
         self._output_dim = output_dim
-        self.probabilities = probabilities
         self.softmax = softmax
 
     @property
