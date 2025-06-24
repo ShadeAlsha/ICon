@@ -8,7 +8,7 @@ class BaseMapper(nn.Module):
         self,
         model: nn.Module,
         input_key: Union[str, List[str]] = "image",
-        output_key: Union[str, List[str]] = "embeddings"
+        output_key: Union[str, List[str]] = "embedding"
     ):
         super().__init__()
         self.model = model
@@ -42,7 +42,7 @@ class WrappedMapper(BaseMapper):
         self,
         model: nn.Module,
         input_key: Union[str, List[str]] = "image",
-        output_key: Union[str, List[str]] = "embeddings",
+        output_key: Union[str, List[str]] = "embedding",
         normalize: bool = False
     ):
         super().__init__(model, input_key, output_key)
@@ -63,7 +63,7 @@ class SimpleCNN(WrappedMapper):
         unit_sphere=False,
         poincare_ball=False,
         input_key="image",
-        output_key="embeddings"
+        output_key="embedding"
     ):
         super().__init__(nn.Identity(), input_key, output_key)
         self.output_dim = output_dim
