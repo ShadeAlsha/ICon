@@ -35,7 +35,7 @@ class PlotLogger(Callback):
         log_to_tensorboard: bool = True,
         max_gif_frames: Optional[int] = None,
         show_final_plots: bool = False,
-        show_gif: bool = True,
+        show_gif: bool = False,
         verbose: bool = False
     ):
         super().__init__()
