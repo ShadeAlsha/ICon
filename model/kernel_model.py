@@ -45,8 +45,6 @@ class Model(pl.LightningModule):
         else:
             self.train_acc = self.val_acc = None
 
-        self.grad_norm = torch.tensor(0.0)
-
     def _setup_monitoring(self):
         self.automatic_optimization = not self.config.use_mixed_precision
 
@@ -114,14 +112,6 @@ class Model(pl.LightningModule):
 
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=400)
         return optimizer
-        #return {
-        #    "optimizer": optimizer,
-        #    "lr_scheduler": {
-        #        "scheduler": scheduler,
-        #        "interval": "epoch",
-        #        "frequency": 1
-        #    }
-        #}
 
     def training_step(self, batch, batch_idx: int) -> torch.Tensor:
         results = self._compute_loss(batch)
@@ -131,34 +121,6 @@ class Model(pl.LightningModule):
             optimizer = self.optimizers()
             optimizer.zero_grad()
             self.manual_backward(loss)
-
-            from collections import defaultdict
-
-            layer_grad_sums = defaultdict(list)
-            for name, param in self.named_parameters():
-                if param.grad is not None and 'linear_probe' not in name:
-                    # Use full module path minus the param name (e.g., remove '.weight' or '.bias')
-                    layer_name = ".".join(name.split('.')[:-1])
-                    layer_grad_sums[layer_name].append(param.grad.norm(2))
-
-            layer_grad_norms = {
-                layer: torch.norm(torch.stack(norms)) for layer, norms in layer_grad_sums.items() if norms
-            }
-
-            for layer, norm in layer_grad_norms.items():
-                self.log(f'grad_norm/{layer}', norm, prog_bar=False)
-
-            if layer_grad_norms:
-                total_norm = torch.norm(torch.stack(list(layer_grad_norms.values())))
-            else:
-                total_norm = torch.tensor(0.0, device=self.device)
-
-            self.grad_norm = total_norm
-
-
-            if self.config.gradient_clip_val > 0:
-                torch.nn.utils.clip_grad_norm_(self.parameters(), self.config.gradient_clip_val)
-
             optimizer.step()
 
         if self.config.use_ema:
@@ -219,9 +181,6 @@ class Model(pl.LightningModule):
                 accuracy_metric(logits.argmax(dim=-1), labels)
                 self.log(f'{phase}_accuracy', accuracy_metric, prog_bar=True)
 
-        if phase == 'train' and self.grad_norm is not None:
-            self.log('grad_norm', self.grad_norm, prog_bar=True)
-
         opts = self.optimizers()
         if not isinstance(opts, (list, tuple)):
             opts = [opts]
@@ -242,8 +201,6 @@ class Model(pl.LightningModule):
     def get_progress_bar_dict(self) -> Dict[str, Union[int, float, str]]:
         items = super().get_progress_bar_dict()
         items.pop("v_num", None)
-        if hasattr(self, 'grad_norm'):
-            items['grad'] = f'{self.grad_norm:.3f}'
         return items
 
 
