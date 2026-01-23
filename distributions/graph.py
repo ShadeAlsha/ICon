@@ -84,7 +84,10 @@ class Augmentation(Kernel):
         super().__init__(**kwargs)
         self.label_kernel = Label(**kwargs)
         self.label_kernel.normalize = False
-        
+
+        self.block = None
+        self.block_size = None
+
         if block is not None:
             self.block = block
             self.block_size = block.shape[0]
