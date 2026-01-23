@@ -36,7 +36,7 @@ def get_dataloaders(
     dataset_name='cifar10',
     num_workers=4,
     size=224,
-    root='/datadrive/pytorch-data',
+    root='./data',
     with_augmentation=True,
     contrastive = True,
     unlabeled = True,
@@ -47,6 +47,11 @@ def get_dataloaders(
     max_train_samples=None,
     ):
     dataset_name = dataset_name.lower()
+
+    # Ensure dataset root directory exists
+    import os
+    os.makedirs(root, exist_ok=True)
+
     # Define normalization parameters
     normalization_params = {
         "cifar10": {"mean": (0.4914, 0.4822, 0.4465), "std": (0.2470, 0.2435, 0.2616)},
