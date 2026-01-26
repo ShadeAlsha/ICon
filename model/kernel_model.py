@@ -7,6 +7,12 @@ from .losses import KernelLoss
 from .ema import EMAUpdater
 from .model_config import Config
 from .metrics import UnsupervisedAccuracy, Accuracy
+import sys
+import os
+
+# Add playground to path for divergence functions
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from playground.divergences import get_divergence_fn
 
 class Model(pl.LightningModule):
     def __init__(self, config: Config):
@@ -33,6 +39,9 @@ class Model(pl.LightningModule):
             if self.config.linear_probe else nn.Identity()
         )
 
+        # Use divergence from config (kl, rkl, js) - this replaces the old loss_type
+        self.divergence_fn = get_divergence_fn(self.config.divergence)
+        # Keep old loss function for backward compatibility with non-playground code
         self.kl_divergence = KernelLoss.get_loss_fn(self.config.loss_type)
 
     def _setup_metrics(self):
@@ -53,10 +62,16 @@ class Model(pl.LightningModule):
         mapper_output = self.mapper(batch) #dictionary
         batch.update(mapper_output)
         learned_distribution = self.learned_distribution(batch, return_log=self.config.log_icon_loss)
-        embeddings = batch.get('embedding', None) 
-        
+        embeddings = batch.get('embedding', None)
+
+        # Use divergence function from playground if available, otherwise fall back to old loss
+        if hasattr(self, 'divergence_fn'):
+            icon_loss = self.divergence_fn(supervisory_distribution, learned_distribution, log_q=self.config.log_icon_loss)
+        else:
+            icon_loss = self.kl_divergence(supervisory_distribution, learned_distribution, log=self.config.log_icon_loss)
+
         losses = {
-            'icon_loss': self.kl_divergence(supervisory_distribution, learned_distribution, log=self.config.log_icon_loss),
+            'icon_loss': icon_loss,
             'linear_probe_loss': self._compute_linear_probe_loss(embeddings.detach(), batch.get('label', None))
         }
 
