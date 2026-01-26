@@ -5,6 +5,17 @@ from os.path import join
 import random
 from tqdm import tqdm
 from torchvision.transforms.functional import to_pil_image
+
+
+class FlattenTransform:
+    """Picklable transform that optionally flattens tensors."""
+    def __init__(self, flatten=False):
+        self.flatten = flatten
+
+    def __call__(self, x):
+        return x.view(-1) if self.flatten else x
+
+
 class ContrastiveDatasetFromImages(Dataset):
     def __init__(self, dataset, num_views=2, transform=None, contrastive=True, distinct_views=True):
         self.dataset = dataset  
@@ -71,6 +82,8 @@ def get_dataloaders(
     normalize = transforms.Normalize(mean=mean, std=std)
 
     # Define transformation pipelines
+    flatten_transform = FlattenTransform(flatten=(dataset_name == 'mnist'))
+
     train_transform = transforms.Compose([
         transforms.RandomResizedCrop(size=size, scale=(0.3, 1.0)),
         transforms.RandomHorizontalFlip() if dataset_name != 'mnist' else transforms.RandomAffine(30, translate=(0.1, 0.1)),
@@ -78,19 +91,19 @@ def get_dataloaders(
         transforms.RandomGrayscale(p=0.2) if dataset_name != 'mnist' else None,
         transforms.ToTensor(),
         normalize,
-        transforms.Lambda(lambda x: x.view(-1) if dataset_name == 'mnist' else x), 
+        flatten_transform,
     ]) if with_augmentation else transforms.Compose([
         transforms.Resize(size=(size, size)),
         transforms.ToTensor(),
         normalize,
-        transforms.Lambda(lambda x: x.view(-1) if dataset_name == 'mnist' else x),  
+        flatten_transform,
     ])
 
     test_transform = transforms.Compose([
         transforms.Resize(size=(size, size)),
         transforms.ToTensor(),
         normalize,
-        transforms.Lambda(lambda x: x.view(-1) if dataset_name == 'mnist' else x),
+        flatten_transform,
     ])
 
     # Remove None transforms (applicable for MNIST)
