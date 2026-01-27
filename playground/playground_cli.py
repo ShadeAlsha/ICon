@@ -33,23 +33,30 @@ def create_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Run a SimCLR-like experiment on CIFAR-10
-  python -m playground.playground_cli --dataset cifar10 --backbone resnet18 --icon_mode simclr_like --epochs 10
 
-  # Use a preset configuration
-  python -m playground.playground_cli --preset cifar_contrastive --epochs 5
+  Standard datasets:
+    python -m playground.playground_cli --dataset cifar10 --icon_mode simclr_like --epochs 10
+    python -m playground.playground_cli --preset cifar_contrastive --epochs 5
 
-  # Run a recipe (multiple experiments)
-  python -m playground.playground_cli --recipe simclr_vs_sne --dataset cifar10 --epochs 10
+  Custom data (bring your own):
+    # Image folder organized by class
+    python -m playground.playground_cli --custom_dataset "folder:/path/to/images" --epochs 50
 
-  # Run t-SNE-like embedding on MNIST
-  python -m playground.playground_cli --dataset mnist --backbone simplecnn --icon_mode tsne_like --epochs 20
+    # Pre-computed embeddings
+    python -m playground.playground_cli --custom_dataset "embeddings:features.npz" --epochs 100
 
-  # Only run probes on existing embeddings
-  python -m playground.playground_cli --probe_only --load_dir playground_runs/my_experiment
+  Visualization:
+    # Generate animated GIF of learning dynamics
+    python -m playground.playground_cli --dataset cifar10 --viz_mode both --gif_every 5
 
-  # Run without visualization (headless mode)
-  python -m playground.playground_cli --dataset cifar10 --icon_mode simclr_like --no_viz
+    # Regenerate GIF with different settings (no retraining)
+    python -m playground.playground_cli --regen_gif --load_dir playground_runs/my_run --gif_method tsne
+
+  Multiple experiments:
+    python -m playground.playground_cli --recipe simclr_vs_sne --epochs 10
+
+For custom data documentation, see: playground/CUSTOM_DATA_GUIDE.md
+For visualization options, see: playground/VISUALIZATION_GUIDE.md
         """,
     )
 
@@ -169,7 +176,7 @@ Examples:
     parser.add_argument(
         "--no_viz",
         action="store_true",
-        help="Skip visualization (for headless runs)",
+        help="Skip visualization (for headless runs) - equivalent to --viz_mode none",
     )
     parser.add_argument(
         "--no_probe",
@@ -179,10 +186,60 @@ Examples:
     parser.add_argument(
         "--tsne",
         action="store_true",
-        help="Use t-SNE instead of PCA for embedding visualization (slower but often nicer)",
+        help="Use t-SNE instead of PCA for static embedding visualization (slower but often nicer)",
     )
 
-    # Probe-only mode
+    # Visualization control section
+    viz_group = parser.add_argument_group('Visualization controls',
+        'Fine-grained control over epoch visualization and GIF generation')
+    viz_group.add_argument(
+        "--viz_mode",
+        type=str,
+        default="both",
+        choices=["none", "static", "gif", "both"],
+        help="Visualization output mode: none (no viz), static (final only), "
+             "gif (animation only), both (default)",
+    )
+    viz_group.add_argument(
+        "--gif_every",
+        type=int,
+        default=1,
+        metavar="N",
+        help="Save a GIF frame every N epochs (default: 1). Example: --gif_every 5",
+    )
+    viz_group.add_argument(
+        "--gif_method",
+        type=str,
+        default="pca",
+        choices=["pca", "tsne", "umap"],
+        help="Projection method for GIF: pca (fast, default), tsne (slower), umap (requires umap-learn)",
+    )
+    viz_group.add_argument(
+        "--gif_fps",
+        type=float,
+        default=2.0,
+        help="Frames per second for GIF playback (default: 2.0)",
+    )
+    viz_group.add_argument(
+        "--gif_max_points",
+        type=int,
+        default=5000,
+        help="Maximum points to plot in GIF (subsample for performance, default: 5000)",
+    )
+    viz_group.add_argument(
+        "--gif_overlay",
+        type=str,
+        default="epoch",
+        choices=["none", "loss", "epoch"],
+        help="Text overlay on GIF frames: none, loss (train/val loss), epoch (default)",
+    )
+    viz_group.add_argument(
+        "--no_save_frames",
+        action="store_true",
+        help="Don't save individual frame PNGs (only keep the GIF)",
+    )
+
+    # Probe-only and regen modes
     parser.add_argument(
         "--probe_only",
         action="store_true",
@@ -191,7 +248,13 @@ Examples:
     parser.add_argument(
         "--load_dir",
         type=str,
-        help="Directory to load existing embeddings from (required with --probe_only)",
+        help="Directory to load existing experiment from (used with --probe_only or --regen_gif)",
+    )
+    parser.add_argument(
+        "--regen_gif",
+        action="store_true",
+        help="Regenerate GIF from saved embeddings without retraining. "
+             "Requires --load_dir. Allows changing GIF settings (--gif_method, --gif_fps, etc.)",
     )
 
     # Advanced options
@@ -223,26 +286,83 @@ Examples:
     parser.add_argument(
         "--save_epoch_gifs",
         action="store_true",
-        help="Save epoch-by-epoch embedding frames and create animated GIF "
-             "showing learning dynamics (slower, but reveals temporal patterns)",
+        help="[DEPRECATED] Use --viz_mode gif or --viz_mode both instead. "
+             "This flag is kept for backwards compatibility.",
     )
 
     # Custom dataset options
-    custom_group = parser.add_argument_group('Custom datasets')
+    custom_group = parser.add_argument_group('Custom datasets (bring your own data)',
+        'Run I-Con on your own images or embeddings. See CUSTOM_DATA_GUIDE.md for details.')
     custom_group.add_argument(
         "--custom_dataset",
         type=str,
-        help="Path to custom dataset. Format: 'type:path' where type is 'folder', 'embeddings', or 'custom'. "
-             "Examples: 'folder:/path/to/images', 'embeddings:features.npz', 'custom:my_dataset.py:MyDatasetClass'",
+        metavar="TYPE:PATH",
+        help="""Load custom data instead of CIFAR/MNIST. Formats:
+
+  Image folders (organized by class):
+    --custom_dataset "folder:/path/to/images"
+
+  Pre-computed embeddings (.npz or .pt):
+    --custom_dataset "embeddings:/path/to/features.npz"
+
+  Custom PyTorch Dataset class:
+    --custom_dataset "custom:/path/to/dataset.py:MyDatasetClass"
+
+See playground/CUSTOM_DATA_GUIDE.md for complete examples.""",
     )
     custom_group.add_argument(
         "--custom_transform",
         type=str,
-        help="Custom transform to apply to images (folder datasets only). "
-             "Format: 'resize:224,normalize:imagenet' or 'resize:28,flatten' for MNIST-like",
+        metavar="SPEC",
+        help="Transform for folder datasets: 'resize:224,normalize:imagenet' (default) "
+             "or 'resize:28,grayscale' for smaller images",
     )
 
     return parser
+
+
+def run_regen_gif(args: argparse.Namespace) -> None:
+    """Regenerate GIF from saved embeddings without retraining."""
+    from playground.viz import regenerate_gif_from_run, VizConfig, VizMode, GifMethod, GifOverlay
+
+    if not args.load_dir:
+        print("Error: --load_dir is required with --regen_gif")
+        sys.exit(1)
+
+    load_dir = Path(args.load_dir)
+    if not load_dir.exists():
+        print(f"Error: Directory not found: {load_dir}")
+        sys.exit(1)
+
+    print(f"\nRegenerating GIF from: {load_dir}")
+
+    # Build VizConfig from CLI args
+    config = VizConfig(
+        viz_mode=VizMode.GIF,  # Force GIF mode for regen
+        gif_every=args.gif_every,
+        gif_method=GifMethod(args.gif_method.lower()),
+        gif_fps=args.gif_fps,
+        gif_max_points=args.gif_max_points,
+        gif_overlay=GifOverlay(args.gif_overlay.lower()),
+        save_frames=not args.no_save_frames,
+    )
+
+    try:
+        result = regenerate_gif_from_run(
+            run_dir=load_dir,
+            config=config,
+        )
+        print(f"\nGIF regenerated successfully!")
+        print(f"  Output: {result['gif_path']}")
+        if result.get('sanity_check', {}).get('warning'):
+            print(f"\n  WARNING: {result['sanity_check']['warning']}")
+    except FileNotFoundError as e:
+        print(f"\nError: {e}")
+        print("\nMake sure the experiment was run with GIF generation enabled (--viz_mode gif or --viz_mode both)")
+        sys.exit(1)
+    except Exception as e:
+        print(f"\nError regenerating GIF: {e}")
+        sys.exit(1)
 
 
 def run_probe_only(args: argparse.Namespace) -> None:
@@ -469,6 +589,8 @@ def run_experiment(args: argparse.Namespace) -> None:
     else:
         # Parse custom dataset argument if provided
         custom_type, custom_path, custom_class = None, None, None
+        dataset_to_use = args.dataset  # Default to CLI arg
+
         if args.custom_dataset:
             parts = args.custom_dataset.split(':')
             if len(parts) < 2:
@@ -479,8 +601,22 @@ def run_experiment(args: argparse.Namespace) -> None:
             if custom_type == 'custom' and len(parts) >= 3:
                 custom_class = parts[2]
 
+            # CRITICAL: Override dataset to "custom" when using custom_dataset
+            # This prevents CIFAR/MNIST validation logic from running
+            dataset_to_use = "custom"
+
+        # Determine visualization mode
+        # Handle backwards compatibility: --no_viz and --save_epoch_gifs
+        if args.no_viz:
+            viz_mode = "none"
+        elif args.save_epoch_gifs:
+            # Deprecated flag, map to new system
+            viz_mode = "both"
+        else:
+            viz_mode = args.viz_mode
+
         config = PlaygroundConfig(
-            dataset=args.dataset,
+            dataset=dataset_to_use,
             backbone=args.backbone,
             icon_mode=args.icon_mode,
             epochs=args.epochs,
@@ -498,6 +634,14 @@ def run_experiment(args: argparse.Namespace) -> None:
             custom_dataset_type=custom_type,
             custom_dataset_path=custom_path,
             custom_dataset_class=custom_class,
+            # Visualization settings
+            viz_mode=viz_mode,
+            gif_every=args.gif_every,
+            gif_method=args.gif_method,
+            gif_fps=args.gif_fps,
+            gif_max_points=args.gif_max_points,
+            gif_overlay=args.gif_overlay,
+            save_frames=not args.no_save_frames,
         )
 
     gpu_setting = True if args.gpu else (False if args.cpu else None)
@@ -509,7 +653,6 @@ def run_experiment(args: argparse.Namespace) -> None:
             save_checkpoints=args.save_checkpoints,
             gpu=gpu_setting,
             debug_device=args.debug_device,
-            save_epoch_gifs=args.save_epoch_gifs,
         )
     except Exception as e:
         print(f"\nExperiment failed: {e}")
@@ -600,16 +743,32 @@ def run_experiment(args: argparse.Namespace) -> None:
     print("\n" + "=" * 60)
     print("EXPERIMENT COMPLETE")
     print("=" * 60)
-    print(f"Results saved to: {run_dir}")
-    print(f"\nKey files:")
-    print(f"  - Config:     {run_dir / 'config.json'}")
-    print(f"  - Embeddings: {run_dir / 'embeddings.npz'}")
-    print(f"  - Logs:       {run_dir / 'logs.json'}")
-    print(f"  - Model:      {run_dir / 'final_model.pt'}")
+    print(f"\nOutput directory: {run_dir}")
+
+    print(f"\nSaved artifacts:")
+    print(f"  Data:")
+    print(f"    embeddings.npz       - Learned representations ({len(results['embeddings'])} samples)")
+    print(f"    logs.json            - Training metrics")
+    print(f"    config.json          - Full configuration")
+    print(f"    final_model.pt       - Model weights")
+
     if not args.no_viz:
-        print(f"  - Plots:      {run_dir / 'training_curves.png'}")
-        print(f"              {run_dir / f'embeddings_{method}.png'}")
-        print(f"              {run_dir / 'distance_histograms.png'}")
+        print(f"\n  Visualizations:")
+        print(f"    training_curves.png  - Loss/accuracy over epochs")
+        print(f"    embeddings_{method}.png - 2D embedding plot")
+        print(f"    distance_histograms.png")
+
+    # Check if GIF was generated
+    gif_path = run_dir / "training_dynamics.gif"
+    if gif_path.exists():
+        gif_size = gif_path.stat().st_size / 1024
+        print(f"\n  Animation:")
+        print(f"    training_dynamics.gif - Animated visualization ({gif_size:.1f} KB)")
+        print(f"\n  To view the GIF:")
+        print(f"    open \"{gif_path}\"")
+
+    print(f"\n  To regenerate visualizations later:")
+    print(f"    python -m playground.playground_cli --regen_gif --load_dir \"{run_dir}\"")
     print("=" * 60)
 
 
@@ -627,8 +786,10 @@ def main():
 ╚═══════════════════════════════════════════════════════════╝
         """)
 
-    # Handle probe-only mode
-    if args.probe_only:
+    # Handle different modes
+    if args.regen_gif:
+        run_regen_gif(args)
+    elif args.probe_only:
         run_probe_only(args)
     elif args.recipe:
         run_recipe(args)

@@ -19,7 +19,7 @@ import json
 from tqdm import tqdm
 
 if TYPE_CHECKING:
-    from playground.epoch_gif_utils import EpochGIFManager
+    from playground.viz.embedding_collector import EpochEmbeddingCollector
 
 
 def assert_tensor_on_device(tensor: torch.Tensor, expected_device: torch.device, name: str = "tensor"):
@@ -135,7 +135,7 @@ class PureTorchTrainer:
         config,
         verbose: bool = True,
         debug_device: bool = False,
-        epoch_frames_manager: Optional['EpochGIFManager'] = None,
+        embedding_collector: Optional['EpochEmbeddingCollector'] = None,
     ):
         """
         Initialize trainer.
@@ -146,13 +146,13 @@ class PureTorchTrainer:
             config: Model configuration
             verbose: Whether to print progress
             debug_device: Print device placement info for debugging
-            epoch_frames_manager: Optional manager for saving epoch-by-epoch frames
+            embedding_collector: Optional collector for saving epoch embeddings (for GIF generation)
         """
         self.device = device
         self.config = config
         self.verbose = verbose
         self.debug_device = debug_device
-        self.epoch_frames_manager = epoch_frames_manager
+        self.embedding_collector = embedding_collector
 
         # Move model to device
         self.model = model.to(device)
@@ -485,21 +485,28 @@ class PureTorchTrainer:
             val_metrics = self.validate_epoch(val_loader)
             self.val_losses.append(val_metrics["val_loss"])
 
-            # Save epoch frame if manager is provided
-            if self.epoch_frames_manager is not None:
-                if self.verbose:
-                    print(f"  Saving epoch {epoch + 1} frame...")
-                # Collect embeddings for this epoch
-                self.start_embedding_collection()
-                _ = self.validate_epoch(val_loader)
-                epoch_data = self.get_collected_embeddings()
+            # Save epoch embeddings if collector is provided
+            if self.embedding_collector is not None:
+                current_epoch = epoch + 1
+                if self.embedding_collector.should_collect(current_epoch):
+                    if self.verbose:
+                        print(f"  Collecting embeddings for epoch {current_epoch}...")
+                    # Collect embeddings for this epoch
+                    self.start_embedding_collection()
+                    _ = self.validate_epoch(val_loader)
+                    epoch_data = self.get_collected_embeddings()
 
-                if epoch_data["embeddings"].shape[0] > 0:
-                    self.epoch_frames_manager.save_epoch_frame(
-                        embeddings=epoch_data["embeddings"],
-                        labels=epoch_data["labels"],
-                        epoch=epoch + 1,
-                    )
+                    if epoch_data.get("embeddings") is not None and len(epoch_data["embeddings"]) > 0:
+                        metadata = {
+                            "train_loss": train_metrics["train_loss"],
+                            "val_loss": val_metrics["val_loss"],
+                        }
+                        self.embedding_collector.save_epoch(
+                            epoch=current_epoch,
+                            embeddings=epoch_data["embeddings"],
+                            labels=epoch_data["labels"],
+                            metadata=metadata,
+                        )
 
             # Log
             epoch_log = {
