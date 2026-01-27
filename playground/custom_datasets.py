@@ -302,8 +302,12 @@ def get_custom_dataloaders(
     Returns:
         Tuple of (train_loader, val_loader)
     """
+    # Extract class_name from kwargs - only used for 'custom' type
+    class_name = kwargs.pop('class_name', None)
+
     if dataset_type == 'folder':
         # Folder-based image dataset
+        # Classes are discovered from folder names, not from class_name parameter
         train_path = Path(path) / 'train'
         val_path = Path(path) / 'val'
 
@@ -332,8 +336,7 @@ def get_custom_dataloaders(
         val_dataset = EmbeddingDataset(path, split='val', contrastive=False)
 
     elif dataset_type == 'custom':
-        # Custom PyTorch Dataset
-        class_name = kwargs.pop('class_name', None)
+        # Custom PyTorch Dataset - requires class_name
         if class_name is None:
             raise ValueError("class_name is required for custom datasets")
 
