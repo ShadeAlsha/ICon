@@ -284,6 +284,7 @@ def get_custom_dataloaders(
     contrastive: bool = True,
     num_views: int = 2,
     train_split: float = 0.8,
+    device: Optional[torch.device] = None,
     **kwargs,
 ) -> Tuple[DataLoader, DataLoader]:
     """
@@ -297,13 +298,18 @@ def get_custom_dataloaders(
         contrastive: Whether to use contrastive mode
         num_views: Number of views for contrastive learning
         train_split: Fraction for training (if dataset has no predefined split)
+        device: Torch device (for pin_memory configuration). If None, defaults to CPU behavior.
         **kwargs: Additional arguments passed to dataset class
 
     Returns:
         Tuple of (train_loader, val_loader)
     """
+    # Extract class_name from kwargs - only used for 'custom' type
+    class_name = kwargs.pop('class_name', None)
+
     if dataset_type == 'folder':
         # Folder-based image dataset
+        # Classes are discovered from folder names, not from class_name parameter
         train_path = Path(path) / 'train'
         val_path = Path(path) / 'val'
 
@@ -332,8 +338,7 @@ def get_custom_dataloaders(
         val_dataset = EmbeddingDataset(path, split='val', contrastive=False)
 
     elif dataset_type == 'custom':
-        # Custom PyTorch Dataset
-        class_name = kwargs.pop('class_name', None)
+        # Custom PyTorch Dataset - requires class_name
         if class_name is None:
             raise ValueError("class_name is required for custom datasets")
 
@@ -352,14 +357,29 @@ def get_custom_dataloaders(
     else:
         raise ValueError(f"Unknown dataset_type: {dataset_type}. Use 'folder', 'embeddings', or 'custom'")
 
+    # Get device-aware DataLoader configuration
+    # pin_memory should ONLY be enabled for CUDA
+    if device is not None and device.type == "cuda":
+        pin_memory = True
+        persistent_workers = num_workers > 0
+    else:
+        pin_memory = False
+        persistent_workers = False
+
     # Create dataloaders
+    dataloader_kwargs = {
+        "num_workers": num_workers,
+        "pin_memory": pin_memory,
+    }
+    if persistent_workers:
+        dataloader_kwargs["persistent_workers"] = True
+
     train_loader = DataLoader(
         train_dataset,
         batch_size=batch_size // num_views if contrastive else batch_size,
         shuffle=True,
         drop_last=True,
-        num_workers=num_workers,
-        pin_memory=True,
+        **dataloader_kwargs,
     )
 
     val_loader = DataLoader(
@@ -367,8 +387,7 @@ def get_custom_dataloaders(
         batch_size=batch_size,
         shuffle=False,
         drop_last=True,
-        num_workers=num_workers,
-        pin_memory=True,
+        **dataloader_kwargs,
     )
 
     return train_loader, val_loader

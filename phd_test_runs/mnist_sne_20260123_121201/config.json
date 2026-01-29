@@ -1,0 +1,20 @@
+{
+  "run_name": "mnist_sne",
+  "dataset": "mnist",
+  "backbone": "simplecnn",
+  "icon_mode": "sne_like",
+  "epochs": 1,
+  "batch_size": 256,
+  "learning_rate": 0.001,
+  "temperature": 0.5,
+  "embedding_dim": 128,
+  "output_dir": "phd_test_runs",
+  "num_workers": 4,
+  "image_size": 28,
+  "use_augmentation": true,
+  "seed": 42,
+  "optimizer": "adamw",
+  "weight_decay": 0.0001,
+  "use_linear_probe": true,
+  "save_checkpoints": false
+}

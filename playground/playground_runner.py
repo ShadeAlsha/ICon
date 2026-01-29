@@ -401,6 +401,14 @@ def _create_experiment_manifest(
             "config": "config.json",
             "model": "final_model.pt",
         },
+        "visualization": {
+            "viz_mode": pg_config.viz_mode,
+            "gif_every": pg_config.gif_every,
+            "gif_method": pg_config.gif_method,
+            "gif_fps": pg_config.gif_fps,
+            "gif_max_points": pg_config.gif_max_points,
+            "gif_overlay": pg_config.gif_overlay,
+        },
     }
 
     return manifest
@@ -410,9 +418,9 @@ def run_playground_experiment_pure_pytorch(
     pg_config: PlaygroundConfig,
     verbose: bool = True,
     save_checkpoints: Optional[bool] = None,
-    gpu: Optional[bool] = None,
+    device: str = "auto",
     debug_device: bool = False,
-    save_epoch_gifs: bool = False,
+    gpu: Optional[bool] = None,  # Deprecated, for backward compatibility
 ) -> Dict[str, Any]:
     """
     Run an I-Con experiment using pure PyTorch (no Lightning).
@@ -428,11 +436,13 @@ def run_playground_experiment_pure_pytorch(
         pg_config: A PlaygroundConfig instance specifying the experiment
         verbose: Whether to print progress information
         save_checkpoints: Whether to save model checkpoints (defaults to config value)
-        gpu: Device selection
-            - None: auto-select (CUDA > MPS > CPU)
-            - True: require GPU (raises error if unavailable)
-            - False: force CPU
+        device: Device selection string
+            - "auto": Automatically select CUDA > MPS > CPU
+            - "cuda": Force CUDA GPU (fails if unavailable)
+            - "mps": Force Apple Silicon GPU (fails if unavailable)
+            - "cpu": Force CPU execution
         debug_device: Print detailed device placement info for debugging
+        gpu: [DEPRECATED] Use device parameter instead
 
     Returns:
         A dictionary containing:
@@ -445,15 +455,28 @@ def run_playground_experiment_pure_pytorch(
 
     Raises:
         ValueError: If configuration is invalid
-        RuntimeError: If GPU requested but not available
+        RuntimeError: If requested device is unavailable
         RuntimeError: If training fails
 
     Example:
         >>> config = PlaygroundConfig(dataset="cifar10", icon_mode="simclr_like",
         ...                           divergence="js", optimizer="adam", epochs=5)
-        >>> results = run_playground_experiment_pure_pytorch(config, gpu=True, debug_device=True)
+        >>> results = run_playground_experiment_pure_pytorch(config, device="cuda", debug_device=True)
         >>> print(f"Final val loss: {results['logs']['val_losses'][-1]:.4f}")
     """
+    # Handle backward compatibility with gpu parameter
+    if gpu is not None:
+        import warnings
+        warnings.warn(
+            "The 'gpu' parameter is deprecated. Use 'device' parameter instead. "
+            "'gpu=True' → 'device=\"auto\"', 'gpu=False' → 'device=\"cpu\"'",
+            DeprecationWarning,
+            stacklevel=2
+        )
+        if gpu is False:
+            device = "cpu"
+        elif gpu is True:
+            device = "auto"
     torch.manual_seed(pg_config.seed)
     np.random.seed(pg_config.seed)
 
@@ -492,8 +515,16 @@ def run_playground_experiment_pure_pytorch(
     # Convert to I-Con config
     icon_config = pg_config.to_icon_config()
 
-    # Get device (explicit, with error on GPU request without GPU)
-    device = DeviceManager.get_device(gpu=gpu, verbose=verbose)
+    # Get device using centralized device selection
+    from playground.device import select_device, log_device_info, verify_device_usage
+
+    if debug_device:
+        log_device_info(verbose=verbose)
+
+    torch_device = select_device(device, verbose=verbose)
+
+    if debug_device:
+        verify_device_usage(torch_device)
 
     # Load dataset
     use_contrastive = pg_config.icon_mode in [
@@ -516,6 +547,7 @@ def run_playground_experiment_pure_pytorch(
             num_workers=pg_config.num_workers,
             contrastive=use_contrastive,
             num_views=2 if use_contrastive else 1,
+            device=torch_device,
             class_name=pg_config.custom_dataset_class,
         )
     else:
@@ -532,6 +564,7 @@ def run_playground_experiment_pure_pytorch(
             contrastive=use_contrastive,
             shuffle_train=True,
             shuffle_test=False,
+            device=torch_device,
         )
 
     if verbose:
@@ -540,24 +573,29 @@ def run_playground_experiment_pure_pytorch(
     # Create model
     model = Model(icon_config)
 
-    # Setup epoch GIF manager if requested
-    epoch_gif_manager = None
-    if save_epoch_gifs:
-        from playground.epoch_gif_utils import EpochGIFManager
-        epoch_frames_dir = run_dir / "epoch_frames"
-        epoch_gif_manager = EpochGIFManager(output_dir=epoch_frames_dir)
+    # Setup epoch embedding collector if GIF generation is enabled
+    embedding_collector = None
+    if pg_config.should_generate_gif:
+        from playground.viz import EpochEmbeddingCollector
+        embedding_collector = EpochEmbeddingCollector(
+            output_dir=run_dir,
+            gif_every=pg_config.gif_every,
+            max_points=pg_config.gif_max_points,
+        )
         if verbose:
             print(f"\nEpoch GIF generation enabled")
-            print(f"  Frames will be saved to: {epoch_frames_dir}")
+            print(f"  Method: {pg_config.gif_method.upper()}")
+            print(f"  Save every: {pg_config.gif_every} epoch(s)")
+            print(f"  Max points: {pg_config.gif_max_points}")
 
     # Create trainer
     trainer = PureTorchTrainer(
         model=model,
-        device=device,
+        device=torch_device,
         config=icon_config,
         verbose=verbose,
         debug_device=debug_device,
-        epoch_frames_manager=epoch_gif_manager,
+        embedding_collector=embedding_collector,
     )
 
     # Train
@@ -605,19 +643,44 @@ def run_playground_experiment_pure_pytorch(
     manifest_path = run_dir / "experiment_manifest.json"
     manifest = _create_experiment_manifest(
         pg_config=pg_config,
-        device=device,
+        device=torch_device,
         logs=logs,
         run_dir=run_dir,
     )
     with open(manifest_path, "w") as f:
         json.dump(manifest, f, indent=2)
 
-    # Create GIF from epoch frames if enabled
-    if save_epoch_gifs and epoch_gif_manager is not None:
-        if verbose:
-            print(f"\nCreating training dynamics GIF...")
-        gif_path = run_dir / "training_dynamics.gif"
-        epoch_gif_manager.create_gif(gif_path, duration=0.5)
+    # Generate GIF from collected epoch embeddings if enabled
+    gif_result = None
+    if pg_config.should_generate_gif and embedding_collector is not None:
+        from playground.viz import generate_training_gif
+
+        # Get epoch metadata from logs
+        epoch_metadata = {}
+        for i, epoch_log in enumerate(logs.get("epoch_logs", [])):
+            epoch_num = epoch_log.get("epoch", i) + 1
+            epoch_metadata[epoch_num] = {
+                "train_loss": epoch_log.get("train_loss"),
+                "val_loss": epoch_log.get("val_loss"),
+            }
+
+        viz_config = pg_config.get_viz_config()
+        embeddings_by_epoch = embedding_collector.get_all_epochs()
+
+        if embeddings_by_epoch:
+            gif_result = generate_training_gif(
+                embeddings_by_epoch=embeddings_by_epoch,
+                labels=embedding_data.get("labels", np.array([])),
+                config=viz_config,
+                output_dir=run_dir,
+                epoch_metadata=epoch_metadata,
+                random_state=pg_config.seed,
+            )
+
+            # Check for sanity warnings
+            if gif_result.get("sanity_check", {}).get("warning"):
+                if verbose:
+                    print(f"\nWARNING: {gif_result['sanity_check']['warning']}")
 
     if verbose:
         print(f"\nExperiment complete!")
@@ -626,20 +689,27 @@ def run_playground_experiment_pure_pytorch(
             print(f"Final validation loss: {logs['val_losses'][-1]:.4f}")
 
     # Return results
+    paths_dict = {
+        "run_dir": str(run_dir),
+        "embeddings": str(embeddings_path),
+        "logs": str(logs_path),
+        "config": str(config_path),
+        "model": str(model_path),
+    }
+
+    # Add GIF path if generated
+    if gif_result is not None:
+        paths_dict["gif"] = str(gif_result.get("gif_path", ""))
+
     results = {
         "logs": logs,
         "embeddings": embedding_data.get("embeddings", np.array([])),
         "labels": embedding_data.get("labels", np.array([])),
         "config": pg_config.to_dict(),
-        "paths": {
-            "run_dir": str(run_dir),
-            "embeddings": str(embeddings_path),
-            "logs": str(logs_path),
-            "config": str(config_path),
-            "model": str(model_path),
-        },
+        "paths": paths_dict,
         "model": model,
         "device": str(device),
+        "gif_result": gif_result,
     }
 
     return results
