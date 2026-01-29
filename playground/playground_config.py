@@ -114,6 +114,15 @@ class PlaygroundConfig:
     divergence: str = "kl"
     use_linear_probe: bool = True
 
+    # Visualization options
+    viz_mode: str = "both"  # 'none', 'static', 'gif', 'both'
+    gif_every: int = 1  # Save frame every N epochs
+    gif_method: str = "pca"  # 'pca', 'tsne', 'umap'
+    gif_fps: float = 2.0  # Frames per second
+    gif_max_points: int = 5000  # Max points to plot (performance)
+    gif_overlay: str = "epoch"  # 'none', 'loss', 'epoch'
+    save_frames: bool = True  # Keep individual frame PNGs
+
     # Custom dataset options
     custom_dataset_type: Optional[str] = None  # 'folder', 'embeddings', 'custom'
     custom_dataset_path: Optional[str] = None  # Path to custom data
@@ -127,11 +136,20 @@ class PlaygroundConfig:
         self.divergence = self.divergence.lower()
         self.optimizer = self.optimizer.lower()
 
+        # Normalize visualization options
+        self.viz_mode = self.viz_mode.lower()
+        self.gif_method = self.gif_method.lower()
+        self.gif_overlay = self.gif_overlay.lower()
+
         if self.image_size is None:
-            self.image_size = {"mnist": 28, "cifar10": 32, "cifar100": 32, "stl10": 96}.get(self.dataset, 32)
+            self.image_size = {"mnist": 28, "cifar10": 32, "cifar100": 32, "stl10": 96}.get(self.dataset, 224)
 
         if self.run_name is None:
-            self.run_name = f"{self.dataset}_{self.backbone}_{self.icon_mode}"
+            # Use "custom_dataset" prefix for custom datasets, not the literal "custom"
+            if self.dataset == "custom" or self.custom_dataset_type is not None:
+                self.run_name = f"custom_dataset_{self.backbone}_{self.icon_mode}"
+            else:
+                self.run_name = f"{self.dataset}_{self.backbone}_{self.icon_mode}"
 
     def validate(self) -> None:
         """
@@ -141,8 +159,11 @@ class PlaygroundConfig:
             ValueError: If any parameter is invalid
         """
         # Allow custom datasets to bypass dataset validation
+        # "custom" is a valid dataset value when custom_dataset_type is set
         if self.custom_dataset_type is None and self.dataset not in SUPPORTED_DATASETS:
             raise ValueError(f"Unsupported dataset: {self.dataset}. Choose from: {SUPPORTED_DATASETS}")
+        if self.dataset == "custom" and self.custom_dataset_type is None:
+            raise ValueError("dataset='custom' requires --custom_dataset to be specified")
 
         if self.custom_dataset_type is not None:
             if self.custom_dataset_type not in ['folder', 'embeddings', 'custom']:
@@ -165,8 +186,10 @@ class PlaygroundConfig:
         if self.optimizer not in ["adam", "adamw", "sgd"]:
             raise ValueError(f"Unsupported optimizer: {self.optimizer}. Choose from: adam, adamw, sgd")
 
-        if self.dataset != "mnist" and self.backbone in ["simplecnn", "mlp"]:
-            raise ValueError(f"Backbone '{self.backbone}' is designed for MNIST only. Use ResNet for {self.dataset}.")
+        # Only enforce MNIST-only backbone check for standard datasets, not custom
+        if self.custom_dataset_type is None and self.dataset not in ["mnist", "custom"]:
+            if self.backbone in ["simplecnn", "mlp"]:
+                raise ValueError(f"Backbone '{self.backbone}' is designed for MNIST only. Use ResNet for {self.dataset}.")
 
         if self.epochs <= 0:
             raise ValueError(f"epochs must be positive, got {self.epochs}")
@@ -182,6 +205,28 @@ class PlaygroundConfig:
             raise ValueError(f"num_workers must be non-negative, got {self.num_workers}")
         if self.seed < 0:
             raise ValueError(f"seed must be non-negative, got {self.seed}")
+
+        # Validate visualization options
+        valid_viz_modes = ['none', 'static', 'gif', 'both']
+        if self.viz_mode not in valid_viz_modes:
+            raise ValueError(f"viz_mode must be one of {valid_viz_modes}, got {self.viz_mode}")
+
+        valid_gif_methods = ['pca', 'tsne', 'umap']
+        if self.gif_method not in valid_gif_methods:
+            raise ValueError(f"gif_method must be one of {valid_gif_methods}, got {self.gif_method}")
+
+        valid_gif_overlays = ['none', 'loss', 'epoch']
+        if self.gif_overlay not in valid_gif_overlays:
+            raise ValueError(f"gif_overlay must be one of {valid_gif_overlays}, got {self.gif_overlay}")
+
+        if self.gif_every < 1:
+            raise ValueError(f"gif_every must be >= 1, got {self.gif_every}")
+
+        if self.gif_fps <= 0:
+            raise ValueError(f"gif_fps must be > 0, got {self.gif_fps}")
+
+        if self.gif_max_points < 100:
+            raise ValueError(f"gif_max_points must be >= 100, got {self.gif_max_points}")
 
         if self.dataset == "mnist" and self.backbone.startswith("resnet"):
             warnings.warn(f"{self.backbone} may not be optimal for MNIST. Consider 'simplecnn' or 'mlp'.", UserWarning)
@@ -458,11 +503,28 @@ class PlaygroundConfig:
             "debiasing_like": "Debiasing configuration with balanced similarity structure",
         }
 
+        viz_info = f"""
+Visualization:
+  Mode:           {self.viz_mode}"""
+        if self.viz_mode in ('gif', 'both'):
+            viz_info += f"""
+  GIF every:      {self.gif_every} epoch(s)
+  GIF method:     {self.gif_method.upper()}
+  GIF fps:        {self.gif_fps}
+  Max points:     {self.gif_max_points}
+  Overlay:        {self.gif_overlay}"""
+
+        # Format dataset display
+        if self.custom_dataset_type is not None:
+            dataset_display = f"CUSTOM ({self.custom_dataset_type})"
+        else:
+            dataset_display = f"{self.dataset.upper()} ({self._get_num_classes()} classes)"
+
         return f"""
 I-Con Playground Configuration
 ==============================
 Run Name:    {self.run_name}
-Dataset:     {self.dataset.upper()} ({self._get_num_classes()} classes)
+Dataset:     {dataset_display}
 Backbone:    {self.backbone}
 I-Con Mode:  {self.icon_mode}
              -> {mode_descriptions.get(self.icon_mode, '')}
@@ -474,6 +536,7 @@ Training:
   Temperature:    {self.temperature}
   Embedding dim:  {self.embedding_dim}
   Save checkpoints: {self.save_checkpoints}
+{viz_info}
 
 Output: {self.output_dir}
 """.strip()
@@ -500,6 +563,14 @@ Output: {self.output_dir}
             "seed": self.seed,
             "use_linear_probe": self.use_linear_probe,
             "save_checkpoints": self.save_checkpoints,
+            # Visualization options
+            "viz_mode": self.viz_mode,
+            "gif_every": self.gif_every,
+            "gif_method": self.gif_method,
+            "gif_fps": self.gif_fps,
+            "gif_max_points": self.gif_max_points,
+            "gif_overlay": self.gif_overlay,
+            "save_frames": self.save_frames,
         }
         # Add custom dataset info if present
         if self.custom_dataset_type is not None:
@@ -508,6 +579,34 @@ Output: {self.output_dir}
             if self.custom_dataset_class is not None:
                 result["custom_dataset_class"] = self.custom_dataset_class
         return result
+
+    def get_viz_config(self):
+        """
+        Create a VizConfig from this PlaygroundConfig.
+
+        Returns:
+            VizConfig configured with this config's visualization settings
+        """
+        from playground.viz.config import VizConfig, VizMode, GifMethod, GifOverlay
+        return VizConfig(
+            viz_mode=VizMode(self.viz_mode),
+            gif_every=self.gif_every,
+            gif_method=GifMethod(self.gif_method),
+            gif_fps=self.gif_fps,
+            gif_max_points=self.gif_max_points,
+            gif_overlay=GifOverlay(self.gif_overlay),
+            save_frames=self.save_frames,
+        )
+
+    @property
+    def should_generate_gif(self) -> bool:
+        """Check if GIF generation is enabled."""
+        return self.viz_mode in ('gif', 'both')
+
+    @property
+    def should_generate_static(self) -> bool:
+        """Check if static visualization is enabled."""
+        return self.viz_mode in ('static', 'both')
 
 
 # ---------------------------------------------------------------------------

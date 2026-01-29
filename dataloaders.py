@@ -56,6 +56,7 @@ def get_dataloaders(
     non_parametric = False,
     return_datasets=False,
     max_train_samples=None,
+    device=None,
     ):
     dataset_name = dataset_name.lower()
 
@@ -142,14 +143,29 @@ def get_dataloaders(
     train_dataset_wrapped = ContrastiveDatasetFromImages(train_dataset, num_views=num_views, transform=train_transform, contrastive=contrastive)
     test_dataset_wrapped = ContrastiveDatasetFromImages(test_dataset, num_views=num_views, transform=test_transform, contrastive=False)
             
+    # Get device-aware DataLoader configuration
+    # pin_memory should ONLY be enabled for CUDA
+    if device is not None and device.type == "cuda":
+        pin_memory = True
+        persistent_workers = num_workers > 0
+    else:
+        pin_memory = False
+        persistent_workers = False
+
     # Create DataLoaders
+    dataloader_kwargs = {
+        "num_workers": num_workers,
+        "pin_memory": pin_memory,
+    }
+    if persistent_workers:
+        dataloader_kwargs["persistent_workers"] = True
+
     train_loader = DataLoader(
         train_dataset_wrapped,
         batch_size=batch_size // num_views,
         shuffle=shuffle_train,
         drop_last=True,
-        num_workers=num_workers,
-        pin_memory=True,
+        **dataloader_kwargs,
     )
 
     test_loader = DataLoader(
@@ -157,8 +173,7 @@ def get_dataloaders(
         batch_size=batch_size // num_views,
         shuffle=shuffle_test,
         drop_last=True,
-        num_workers=num_workers,
-        pin_memory=True,
+        **dataloader_kwargs,
     )
 
     return train_loader, test_loader

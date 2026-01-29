@@ -30,6 +30,7 @@ class Kernel(nn.Module):
                 x = batch[self.input_key]
             else:
                 raise ValueError("No input_key(s) specified for dict input.")
+
             return self._compute(x, **kwargs)
         else:
             return self._compute(*args, **kwargs)
