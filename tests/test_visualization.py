@@ -498,6 +498,176 @@ class TestGifGeneration:
         assert results[0]['projector_info']['total_variance_explained'] == \
                results[1]['projector_info']['total_variance_explained']
 
+    def test_variable_sized_epochs_uses_anchor_tracking(self):
+        """Test GIF generation with variable-sized epochs uses anchor-based tracking."""
+        from playground.viz import generate_training_gif, VizConfig
+
+        np.random.seed(42)
+
+        # Create epochs with DIFFERENT sizes (simulates custom dataset behavior)
+        embeddings_by_epoch = {
+            1: {
+                'embeddings': np.random.randn(100, 64),
+                'labels': np.random.randint(0, 5, 100),
+            },
+            2: {
+                'embeddings': np.random.randn(80, 64) + 0.5,  # Smaller epoch
+                'labels': np.random.randint(0, 5, 80),
+            },
+            3: {
+                'embeddings': np.random.randn(120, 64) + 1.0,  # Larger epoch
+                'labels': np.random.randint(0, 5, 120),
+            },
+        }
+
+        config = VizConfig(gif_max_points=150)  # More than largest epoch
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = generate_training_gif(
+                embeddings_by_epoch=embeddings_by_epoch,
+                labels=embeddings_by_epoch[1]['labels'],
+                config=config,
+                output_dir=Path(tmpdir),
+                random_state=42,
+            )
+
+            # GIF should be created successfully
+            assert result['gif_path'].exists()
+
+            # Check anchor_strategy is present and correct
+            assert 'anchor_strategy' in result
+            anchor_info = result['anchor_strategy']
+            assert anchor_info['strategy'] == 'fixed_anchor_tracking'
+            assert anchor_info['variable_sizes'] is True
+            assert anchor_info['min_epoch_count'] == 80
+            assert anchor_info['max_epoch_count'] == 120
+            # Anchor count should be min(gif_max_points, min_epoch_count)
+            assert anchor_info['anchor_count'] == 80
+
+    def test_variable_sized_epochs_no_silent_drops(self):
+        """Test that variable-sized epochs don't silently drop data."""
+        from playground.viz import generate_training_gif, VizConfig
+
+        np.random.seed(42)
+
+        # Create 5 epochs with different sizes
+        embeddings_by_epoch = {
+            1: {'embeddings': np.random.randn(100, 64), 'labels': np.random.randint(0, 5, 100)},
+            2: {'embeddings': np.random.randn(90, 64) + 0.2, 'labels': np.random.randint(0, 5, 90)},
+            3: {'embeddings': np.random.randn(95, 64) + 0.4, 'labels': np.random.randint(0, 5, 95)},
+            4: {'embeddings': np.random.randn(85, 64) + 0.6, 'labels': np.random.randint(0, 5, 85)},
+            5: {'embeddings': np.random.randn(100, 64) + 0.8, 'labels': np.random.randint(0, 5, 100)},
+        }
+
+        config = VizConfig(gif_max_points=200, save_frames=True)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = generate_training_gif(
+                embeddings_by_epoch=embeddings_by_epoch,
+                labels=embeddings_by_epoch[1]['labels'],
+                config=config,
+                output_dir=Path(tmpdir),
+                random_state=42,
+            )
+
+            # All 5 epochs should be included (none dropped)
+            assert result['n_epochs'] == 5
+            assert len(result['frame_paths']) == 5
+
+    def test_uniform_sized_epochs_still_works(self):
+        """Test that uniform-sized epochs still work correctly."""
+        from playground.viz import generate_training_gif, VizConfig
+
+        np.random.seed(42)
+
+        # All epochs have the same size
+        embeddings_by_epoch = {
+            1: {'embeddings': np.random.randn(100, 64), 'labels': np.random.randint(0, 5, 100)},
+            2: {'embeddings': np.random.randn(100, 64) + 0.5, 'labels': np.random.randint(0, 5, 100)},
+            3: {'embeddings': np.random.randn(100, 64) + 1.0, 'labels': np.random.randint(0, 5, 100)},
+        }
+
+        config = VizConfig(gif_max_points=100)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = generate_training_gif(
+                embeddings_by_epoch=embeddings_by_epoch,
+                labels=embeddings_by_epoch[1]['labels'],
+                config=config,
+                output_dir=Path(tmpdir),
+                random_state=42,
+            )
+
+            assert result['gif_path'].exists()
+            assert 'anchor_strategy' in result
+            # variable_sizes should be False for uniform epochs
+            assert result['anchor_strategy']['variable_sizes'] is False
+
+    def test_anchor_tracking_determinism(self):
+        """Test that anchor-based tracking produces deterministic results."""
+        from playground.viz import generate_training_gif, VizConfig
+
+        np.random.seed(42)
+
+        # Variable-sized epochs
+        embeddings_by_epoch = {
+            1: {'embeddings': np.random.randn(100, 64), 'labels': np.random.randint(0, 5, 100)},
+            2: {'embeddings': np.random.randn(80, 64) + 0.5, 'labels': np.random.randint(0, 5, 80)},
+        }
+
+        config = VizConfig(gif_max_points=150)
+
+        results = []
+        for _ in range(2):
+            with tempfile.TemporaryDirectory() as tmpdir:
+                result = generate_training_gif(
+                    embeddings_by_epoch=embeddings_by_epoch,
+                    labels=embeddings_by_epoch[1]['labels'],
+                    config=config,
+                    output_dir=Path(tmpdir),
+                    random_state=42,  # Same seed
+                )
+                results.append(result)
+
+        # Anchor strategy should be identical
+        assert results[0]['anchor_strategy'] == results[1]['anchor_strategy']
+        # Projector info should be identical
+        assert results[0]['projector_info']['total_variance_explained'] == \
+               results[1]['projector_info']['total_variance_explained']
+
+    def test_sanity_check_uses_anchors(self):
+        """Test that embedding change sanity check uses anchor indices."""
+        from playground.viz import generate_training_gif, VizConfig
+
+        np.random.seed(42)
+
+        # Create base embeddings with consistent range
+        base_embeddings = np.random.randn(100, 64)
+
+        # Epochs with different sizes but clearly changing embeddings
+        # Use scaled shifts to keep data in similar range for consistent frame sizes
+        embeddings_by_epoch = {
+            1: {'embeddings': base_embeddings.copy(), 'labels': np.random.randint(0, 5, 100)},
+            2: {'embeddings': base_embeddings[:80] * 2 + 5, 'labels': np.random.randint(0, 5, 80)},  # Clear shift
+            3: {'embeddings': base_embeddings[:90] * 1.5 + 3, 'labels': np.random.randint(0, 5, 90)},  # Add 3rd epoch
+        }
+
+        config = VizConfig(gif_max_points=150)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = generate_training_gif(
+                embeddings_by_epoch=embeddings_by_epoch,
+                labels=embeddings_by_epoch[1]['labels'],
+                config=config,
+                output_dir=Path(tmpdir),
+                random_state=42,
+            )
+
+            # Sanity check should detect that embeddings changed
+            assert result['sanity_check']['changed'] is True
+            # Should report anchor count
+            assert 'anchor_count' in result['sanity_check']
+
 
 @pytest.mark.integration
 class TestRegenGif:

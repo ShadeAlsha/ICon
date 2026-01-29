@@ -123,7 +123,7 @@ def plot_training_curves(
 def plot_embeddings_2d(
     embeddings: np.ndarray,
     labels: np.ndarray,
-    method: Literal["pca", "tsne"] = "pca",
+    method: Literal["pca", "tsne", "umap"] = "pca",
     out_path: Optional[str] = None,
     figsize: tuple = (10, 8),
     show: bool = True,
@@ -136,7 +136,7 @@ def plot_embeddings_2d(
     alpha: float = 0.7,
 ) -> plt.Figure:
     """
-    Visualize embeddings in 2D using PCA or t-SNE.
+    Visualize embeddings in 2D using PCA, t-SNE, or UMAP.
 
     This function reduces high-dimensional embeddings to 2D for visualization,
     colored by class labels. It helps students see how different I-Con modes
@@ -145,13 +145,13 @@ def plot_embeddings_2d(
     Args:
         embeddings: Array of shape (n_samples, embedding_dim)
         labels: Array of shape (n_samples,) with class labels
-        method: Dimensionality reduction method - "pca" (fast) or "tsne" (slower but often nicer)
+        method: Dimensionality reduction method - "pca" (fast), "tsne", or "umap" (requires umap-learn)
         out_path: Optional path to save the figure
         figsize: Figure size as (width, height)
         show: Whether to display the plot
         title: Optional custom title for the plot
         max_samples: Maximum samples to plot (subsampled if exceeded)
-        perplexity: Perplexity parameter for t-SNE (ignored for PCA)
+        perplexity: Perplexity parameter for t-SNE (ignored for PCA/UMAP)
         random_state: Random seed for reproducibility
         colormap: Matplotlib colormap name for class colors
         point_size: Size of scatter points
@@ -209,8 +209,31 @@ def plot_embeddings_2d(
         embeddings_2d = reducer.fit_transform(embeddings)
         method_info = f"t-SNE (perplexity={perplexity})"
 
+    elif method.lower() == "umap":
+        try:
+            import umap
+        except ImportError:
+            print("\nWarning: umap-learn not installed. Falling back to PCA.")
+            print("To use UMAP, install with: pip install umap-learn\n")
+            from sklearn.decomposition import PCA
+            reducer = PCA(n_components=2, random_state=random_state)
+            embeddings_2d = reducer.fit_transform(embeddings)
+            explained_var = reducer.explained_variance_ratio_.sum() * 100
+            method_info = f"PCA (explained variance: {explained_var:.1f}%) [UMAP unavailable]"
+        else:
+            # UMAP with sensible defaults
+            reducer = umap.UMAP(
+                n_components=2,
+                n_neighbors=15,
+                min_dist=0.1,
+                metric='euclidean',
+                random_state=random_state,
+            )
+            embeddings_2d = reducer.fit_transform(embeddings)
+            method_info = "UMAP"
+
     else:
-        raise ValueError(f"Unknown method: {method}. Choose 'pca' or 'tsne'.")
+        raise ValueError(f"Unknown method: {method}. Choose 'pca', 'tsne', or 'umap'.")
 
     fig, ax = plt.subplots(1, 1, figsize=figsize)
 
@@ -458,8 +481,18 @@ def create_experiment_summary(
         "=" * 25,
         f"Final Val Loss: {logs['val_losses'][-1]:.4f}" if logs.get('val_losses') else "N/A",
         f"Final Val Acc: {logs['val_accuracies'][-1]:.4f}" if logs.get('val_accuracies') else "N/A",
+        "",
+        "Observed Limitations",
+        "=" * 25,
+        "• Small datasets: nuisance",
+        "  factors may dominate",
+        "• Unsupervised objectives:",
+        "  no guarantee of semantic",
+        "  alignment with labels",
+        "• PCA separation ≠ linear",
+        "  separability",
     ])
-    ax3.text(0.1, 0.9, info_text, transform=ax3.transAxes, fontsize=11,
+    ax3.text(0.1, 0.9, info_text, transform=ax3.transAxes, fontsize=10,
              verticalalignment="top", fontfamily="monospace")
 
     plt.tight_layout()
