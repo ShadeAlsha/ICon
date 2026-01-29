@@ -32,11 +32,23 @@ def create_parser() -> argparse.ArgumentParser:
         description="I-Con Playground: Run small I-Con experiments with ease",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
+Typical Workflow:
+  1. Prepare dataset (use built-in or --custom_dataset)
+  2. Run training (specify --icon_mode and --epochs)
+  3. Inspect embeddings (PCA/UMAP plots in output directory)
+  4. Interpret probes (linear/k-NN accuracies measure quality)
+
 Examples:
+
+  Quick start (uses sensible defaults):
+    python -m playground.playground_cli
 
   Standard datasets:
     python -m playground.playground_cli --dataset cifar10 --icon_mode simclr_like --epochs 10
     python -m playground.playground_cli --preset cifar_contrastive --epochs 5
+
+  Embedding dimension ablation:
+    python -m playground.playground_cli --ablate_embedding_dim --epochs 50
 
   Custom data (bring your own):
     # Image folder organized by class
@@ -95,7 +107,9 @@ For visualization options, see: playground/VISUALIZATION_GUIDE.md
         default="simclr_like",
         choices=["simclr_like", "sne_like", "tsne_like", "supervised", "cluster_like",
                  "barlow_twins_like", "vicreg_like", "debiasing_like"],
-        help="I-Con mode/objective preset (default: simclr_like)",
+        help="I-Con mode/objective. simclr_like: contrastive learning from augmentations "
+             "(learns invariances to crops/color/blur). sne_like/tsne_like: neighbor-preserving embeddings. "
+             "supervised: uses class labels directly. (default: simclr_like)",
     )
 
     # Training hyperparameters
@@ -151,6 +165,14 @@ For visualization options, see: playground/VISUALIZATION_GUIDE.md
         help="Weight decay for optimizer (default: 1e-4)",
     )
 
+    # Ablation study
+    parser.add_argument(
+        "--ablate_embedding_dim",
+        action="store_true",
+        help="Run controlled ablation: train with embedding_dim=64 and 128, then compare. "
+             "Generates comparison plot and JSON with probe accuracies.",
+    )
+
     # Output and runtime
     parser.add_argument(
         "--out_dir", "--output_dir",
@@ -181,7 +203,9 @@ For visualization options, see: playground/VISUALIZATION_GUIDE.md
     parser.add_argument(
         "--no_probe",
         action="store_true",
-        help="Skip running linear probe after training",
+        help="Skip evaluation probes. Probes measure representation quality by training "
+             "a simple classifier (linear or k-NN) on frozen embeddings. Higher probe "
+             "accuracy = better learned representations.",
     )
     parser.add_argument(
         "--tsne",
@@ -263,15 +287,30 @@ For visualization options, see: playground/VISUALIZATION_GUIDE.md
         action="store_true",
         help="Save model checkpoints during training",
     )
+
+    # Device selection (primary interface)
+    parser.add_argument(
+        "--device",
+        type=str,
+        default="auto",
+        choices=["auto", "cpu", "cuda", "mps"],
+        help="Device selection for training. "
+             "'auto' automatically selects CUDA > MPS > CPU. "
+             "'cuda' requires CUDA GPU (fails if unavailable). "
+             "'mps' requires Apple Silicon GPU (fails if unavailable). "
+             "'cpu' forces CPU execution. (default: auto)",
+    )
+
+    # Backward compatibility flags (deprecated)
     parser.add_argument(
         "--cpu",
         action="store_true",
-        help="Force CPU training (ignore GPU)",
+        help="[DEPRECATED] Use --device cpu instead. Force CPU training.",
     )
     parser.add_argument(
         "--gpu",
         action="store_true",
-        help="Enable GPU training if available (default: CPU)",
+        help="[DEPRECATED] Use --device auto instead. Enable GPU if available.",
     )
     parser.add_argument(
         "--quiet",
@@ -319,6 +358,33 @@ See playground/CUSTOM_DATA_GUIDE.md for complete examples.""",
     )
 
     return parser
+
+
+def resolve_device_arg(args: argparse.Namespace) -> str:
+    """
+    Resolve device selection from CLI arguments, handling backward compatibility.
+
+    Args:
+        args: Parsed command-line arguments
+
+    Returns:
+        Device string: 'auto', 'cpu', 'cuda', or 'mps'
+    """
+    # Handle backward compatibility with --cpu and --gpu flags
+    if args.cpu and args.gpu:
+        print("Warning: Both --cpu and --gpu specified. Using --cpu.")
+        return "cpu"
+
+    if args.cpu:
+        print("Note: --cpu is deprecated. Use --device cpu instead.")
+        return "cpu"
+
+    if args.gpu:
+        print("Note: --gpu is deprecated. Use --device auto instead.")
+        return "auto"  # --gpu meant "use GPU if available"
+
+    # Use the explicit --device argument
+    return args.device
 
 
 def run_regen_gif(args: argparse.Namespace) -> None:
@@ -509,14 +575,14 @@ def run_recipe(args: argparse.Namespace) -> None:
         print(f"RUNNING EXPERIMENT {i}/{len(configs)}: {config.run_name}")
         print(f"{'='*60}")
 
-        gpu_setting = True if args.gpu else (False if args.cpu else None)
+        device = resolve_device_arg(args)
 
         try:
             results = run_playground_experiment_pure_pytorch(
                 config,
                 verbose=not args.quiet,
                 save_checkpoints=args.save_checkpoints,
-                gpu=gpu_setting,
+                device=device,
                 debug_device=args.debug_device,
                 save_epoch_gifs=args.save_epoch_gifs,
             )
@@ -564,6 +630,208 @@ def run_recipe(args: argparse.Namespace) -> None:
         with open(summary_path, "w") as f:
             json.dump(summary, f, indent=2)
         print(f"\nSummary saved to: {summary_path}")
+
+
+def run_embedding_dim_ablation(args: argparse.Namespace) -> None:
+    """
+    Run controlled embedding dimension ablation study.
+
+    Trains models with embedding_dim = 64 and 128, keeping all other
+    hyperparameters constant. Generates comparison plot and JSON.
+
+    This is a minimal, clean ablation for understanding how embedding
+    dimension affects representation quality.
+    """
+    import json
+    import matplotlib.pyplot as plt
+    from pathlib import Path
+    from playground.playground_config import PlaygroundConfig
+    from playground.playground_runner import run_playground_experiment_pure_pytorch
+    from playground.playground_probes import run_linear_probe, run_knn_probe, analyze_class_separability
+
+    if not args.quiet:
+        print("\n" + "="*60)
+        print("RUNNING EMBEDDING DIMENSION ABLATION")
+        print("="*60)
+        print("\nThis ablation compares embedding_dim = 64 vs 128")
+        print("All other hyperparameters are held constant.\n")
+
+    # Handle custom dataset parsing
+    custom_type, custom_path, custom_class = None, None, None
+    dataset_to_use = args.dataset
+
+    if args.custom_dataset:
+        parts = args.custom_dataset.split(':')
+        if len(parts) < 2:
+            print("Error: --custom_dataset format should be 'type:path'")
+            sys.exit(1)
+        custom_type = parts[0]
+        custom_path = parts[1]
+        if custom_type == 'custom' and len(parts) >= 3:
+            custom_class = parts[2]
+        dataset_to_use = "custom"
+
+    # Determine viz mode
+    if args.no_viz:
+        viz_mode = "none"
+    elif args.save_epoch_gifs:
+        viz_mode = "both"
+    else:
+        viz_mode = args.viz_mode
+
+    # Create base output directory for ablation
+    base_output = Path(args.output_dir)
+    ablation_name = f"ablation_embedding_dim_{args.icon_mode}_{args.dataset}"
+    ablation_dir = base_output / ablation_name
+    ablation_dir.mkdir(parents=True, exist_ok=True)
+
+    # Two embedding dimensions to test
+    embedding_dims = [64, 128]
+    results_by_dim = {}
+
+    device = resolve_device_arg(args)
+
+    # Run experiments for each dimension
+    for dim in embedding_dims:
+        print(f"\n{'='*60}")
+        print(f"TRAINING WITH EMBEDDING_DIM = {dim}")
+        print(f"{'='*60}\n")
+
+        # Create config for this dimension
+        config = PlaygroundConfig(
+            dataset=dataset_to_use,
+            backbone=args.backbone,
+            icon_mode=args.icon_mode,
+            epochs=args.epochs,
+            batch_size=args.batch_size,
+            learning_rate=args.learning_rate,
+            temperature=args.temperature,
+            embedding_dim=dim,  # ABLATION VARIABLE
+            divergence=args.divergence,
+            optimizer=args.optimizer,
+            weight_decay=args.weight_decay,
+            output_dir=str(ablation_dir / f"dim_{dim}"),  # Separate subdirectory
+            seed=args.seed,  # Same seed for fair comparison
+            num_workers=args.num_workers,
+            save_checkpoints=False,  # Don't need checkpoints for ablation
+            custom_dataset_type=custom_type,
+            custom_dataset_path=custom_path,
+            custom_dataset_class=custom_class,
+            viz_mode=viz_mode,
+            gif_every=args.gif_every,
+            gif_method=args.gif_method,
+            gif_fps=args.gif_fps,
+            gif_max_points=args.gif_max_points,
+            gif_overlay=args.gif_overlay,
+            save_frames=not args.no_save_frames,
+        )
+
+        # Run experiment
+        try:
+            results = run_playground_experiment_pure_pytorch(
+                config,
+                verbose=not args.quiet,
+                save_checkpoints=False,
+                device=device,
+                debug_device=args.debug_device,
+            )
+        except Exception as e:
+            print(f"\nExperiment failed for dim={dim}: {e}")
+            sys.exit(1)
+
+        # Run probes if embeddings exist
+        if len(results["embeddings"]) > 0:
+            if not args.quiet:
+                print(f"\nRunning evaluation probes for dim={dim}...")
+
+            # Linear probe
+            probe_results = run_linear_probe(
+                results["embeddings"],
+                results["labels"],
+                verbose=not args.quiet,
+            )
+
+            # kNN probe
+            knn_results = run_knn_probe(
+                results["embeddings"],
+                results["labels"],
+                verbose=not args.quiet,
+            )
+
+            # Separability
+            sep_results = analyze_class_separability(
+                results["embeddings"],
+                results["labels"],
+                verbose=not args.quiet,
+            )
+
+            # Store results
+            results_by_dim[dim] = {
+                "embedding_dim": dim,
+                "linear_probe_test_acc": probe_results.get("test_accuracy", 0.0),
+                "knn_test_acc": knn_results.get("test_accuracy", 0.0),
+                "separability_ratio": sep_results.get("separability_ratio", 0.0),
+                "run_dir": results["paths"]["run_dir"],
+            }
+
+    # Generate comparison outputs
+    print(f"\n{'='*60}")
+    print("ABLATION COMPARISON")
+    print(f"{'='*60}\n")
+
+    # Create comparison JSON
+    comparison = {
+        "ablation_type": "embedding_dimension",
+        "results": results_by_dim,
+        "config": {
+            "dataset": args.dataset,
+            "backbone": args.backbone,
+            "icon_mode": args.icon_mode,
+            "epochs": args.epochs,
+            "seed": args.seed,
+        }
+    }
+
+    comparison_path = ablation_dir / "comparison.json"
+    with open(comparison_path, "w") as f:
+        json.dump(comparison, f, indent=2)
+
+    print(f"Comparison saved to: {comparison_path}")
+
+    # Print comparison table
+    print("\nResults Summary:")
+    print(f"{'Embedding Dim':<15} {'Linear Probe':<15} {'k-NN Probe':<15} {'Separability':<15}")
+    print("-" * 60)
+    for dim in embedding_dims:
+        r = results_by_dim[dim]
+        print(f"{dim:<15} {r['linear_probe_test_acc']:<15.4f} {r['knn_test_acc']:<15.4f} {r['separability_ratio']:<15.4f}")
+
+    # Generate comparison plot
+    fig, ax = plt.subplots(figsize=(8, 6))
+
+    dims = list(results_by_dim.keys())
+    linear_accs = [results_by_dim[d]["linear_probe_test_acc"] for d in dims]
+    knn_accs = [results_by_dim[d]["knn_test_acc"] for d in dims]
+
+    ax.plot(dims, linear_accs, 'o-', label='Linear Probe', linewidth=2, markersize=10)
+    ax.plot(dims, knn_accs, 's-', label='k-NN Probe', linewidth=2, markersize=10)
+
+    ax.set_xlabel('Embedding Dimension', fontsize=12)
+    ax.set_ylabel('Test Accuracy', fontsize=12)
+    ax.set_title('Embedding Dimension Ablation', fontsize=14, fontweight='bold')
+    ax.legend(fontsize=11)
+    ax.grid(True, alpha=0.3)
+    ax.set_xticks(dims)
+    ax.set_ylim([0, 1])
+
+    plt.tight_layout()
+    plot_path = ablation_dir / "embedding_dim_comparison.png"
+    plt.savefig(plot_path, dpi=150, bbox_inches='tight')
+    plt.close()
+
+    print(f"\nComparison plot saved to: {plot_path}")
+    print(f"\nAll ablation results saved in: {ablation_dir}")
+    print("\nAblation complete!")
 
 
 def run_experiment(args: argparse.Namespace) -> None:
@@ -644,14 +912,14 @@ def run_experiment(args: argparse.Namespace) -> None:
             save_frames=not args.no_save_frames,
         )
 
-    gpu_setting = True if args.gpu else (False if args.cpu else None)
+    device = resolve_device_arg(args)
 
     try:
         results = run_playground_experiment_pure_pytorch(
             config,
             verbose=not args.quiet,
             save_checkpoints=args.save_checkpoints,
-            gpu=gpu_setting,
+            device=device,
             debug_device=args.debug_device,
         )
     except Exception as e:
@@ -711,16 +979,37 @@ def run_experiment(args: argparse.Namespace) -> None:
                 show=False,
             )
 
-        # Embedding visualization
-        method = "tsne" if args.tsne else "pca"
-        print(f"\nPlotting embeddings using {method.upper()}...")
+        # Embedding visualization: Generate PCA + UMAP (nonlinear)
+        # PCA is always generated (fast, linear baseline)
+        print("\nPlotting embeddings using PCA...")
         plot_embeddings_2d(
             results["embeddings"],
             results["labels"],
-            method=method,
-            out_path=str(run_dir / f"embeddings_{method}.png"),
+            method="pca",
+            out_path=str(run_dir / "embeddings_pca.png"),
             show=False,
         )
+
+        # UMAP as nonlinear projection (falls back to PCA if unavailable)
+        print("\nPlotting embeddings using UMAP (nonlinear)...")
+        plot_embeddings_2d(
+            results["embeddings"],
+            results["labels"],
+            method="umap",
+            out_path=str(run_dir / "embeddings_umap.png"),
+            show=False,
+        )
+
+        # Optional t-SNE if user explicitly requests it
+        if args.tsne:
+            print("\nPlotting embeddings using t-SNE (user requested)...")
+            plot_embeddings_2d(
+                results["embeddings"],
+                results["labels"],
+                method="tsne",
+                out_path=str(run_dir / "embeddings_tsne.png"),
+                show=False,
+            )
 
         # Distance histograms
         print("\nPlotting distance histograms...")
@@ -793,6 +1082,8 @@ def main():
         run_probe_only(args)
     elif args.recipe:
         run_recipe(args)
+    elif args.ablate_embedding_dim:
+        run_embedding_dim_ablation(args)
     else:
         run_experiment(args)
 

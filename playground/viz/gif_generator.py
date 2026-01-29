@@ -28,10 +28,15 @@ def generate_training_gif(
     Generate a training dynamics GIF from embeddings.
 
     This function is the main entry point for GIF generation. It:
-    1. Fits a projection model ONCE on the final epoch embeddings
-    2. Projects all epochs using the same projection (consistent axes)
-    3. Generates frame images for each epoch
-    4. Stitches frames into an animated GIF
+    1. Selects a fixed anchor index set from epoch 1 for consistent point tracking
+    2. Fits a projection model ONCE on the final epoch embeddings
+    3. Projects all epochs using the same projection (consistent axes)
+    4. Generates frame images for each epoch using the SAME anchor points
+    5. Stitches frames into an animated GIF
+
+    The anchor-based strategy ensures that the same points are tracked across
+    all epochs, which is critical for custom datasets where per-epoch embedding
+    counts may differ.
 
     Args:
         embeddings_by_epoch: Dict mapping epoch -> {'embeddings': array, 'labels': array}
@@ -39,7 +44,7 @@ def generate_training_gif(
         config: VizConfig with GIF settings
         output_dir: Directory to save frames and GIF
         epoch_metadata: Optional per-epoch metadata (loss, accuracy, etc.)
-        random_state: Seed for reproducibility
+        random_state: Seed for reproducibility (same seed → same GIF)
 
     Returns:
         Dictionary with:
@@ -47,6 +52,7 @@ def generate_training_gif(
         - frame_paths: List of frame image paths
         - projector_info: Information about the projection
         - sanity_check: Results of embedding change check
+        - anchor_strategy: Information about anchor point selection
 
     Example:
         >>> from playground.viz import generate_training_gif, VizConfig
@@ -63,7 +69,7 @@ def generate_training_gif(
     frames_dir = output_dir / "epoch_frames"
     frames_dir.mkdir(parents=True, exist_ok=True)
 
-    # Set random state for reproducibility
+    # Set random state for reproducibility (deterministic GIFs)
     np.random.seed(random_state)
 
     # Sort epochs
@@ -80,17 +86,87 @@ def generate_training_gif(
     print(f"  Max points: {config.gif_max_points}")
     print(f"  Output:     {output_dir}")
 
-    # Fit projector on final epoch embeddings
+    # ================================================================
+    # ANCHOR-BASED POINT TRACKING STRATEGY
+    # ================================================================
+    # Select fixed anchor indices from the first epoch to track across
+    # all epochs. This ensures consistent visualization even when
+    # per-epoch embedding counts differ (common with custom datasets).
+    # ================================================================
+    first_epoch = min(epochs)
+    first_epoch_data = embeddings_by_epoch[first_epoch]
+    first_epoch_count = len(first_epoch_data["embeddings"])
+
+    # Compute minimum sample count across all epochs
+    min_epoch_count = min(
+        len(embeddings_by_epoch[e]["embeddings"]) for e in epochs
+    )
+    max_epoch_count = max(
+        len(embeddings_by_epoch[e]["embeddings"]) for e in epochs
+    )
+
+    # Determine anchor count: min of (gif_max_points, min_epoch_count)
+    anchor_count = min(config.gif_max_points, min_epoch_count)
+
+    # Warn if dataset is too small or unstable
+    if anchor_count < 50:
+        warnings.warn(
+            f"Dataset has only {anchor_count} trackable points across all epochs. "
+            f"GIF visualization may be sparse. Consider collecting more samples.",
+            UserWarning
+        )
+        print(f"\n  WARNING: Small dataset - only {anchor_count} points can be tracked")
+
+    if max_epoch_count != min_epoch_count:
+        print(f"\n  NOTE: Variable embedding counts detected across epochs:")
+        print(f"    Min: {min_epoch_count}, Max: {max_epoch_count}")
+        print(f"    Using ANCHOR-BASED TRACKING to ensure consistent visualization")
+        print(f"    Strategy: Track {anchor_count} fixed points across all epochs")
+    else:
+        print(f"\n  Tracking strategy: Fixed anchor points ({anchor_count} samples)")
+
+    # Select anchor indices from first epoch (seeded for determinism)
+    if first_epoch_count > anchor_count:
+        anchor_indices = np.sort(np.random.choice(
+            first_epoch_count,
+            anchor_count,
+            replace=False
+        ))
+    else:
+        anchor_indices = np.arange(first_epoch_count)
+
+    anchor_strategy = {
+        "strategy": "fixed_anchor_tracking",
+        "anchor_count": int(anchor_count),
+        "first_epoch_count": int(first_epoch_count),
+        "min_epoch_count": int(min_epoch_count),
+        "max_epoch_count": int(max_epoch_count),
+        "variable_sizes": max_epoch_count != min_epoch_count,
+        "random_state": random_state,
+    }
+
+    # Fit projector on final epoch embeddings (using anchor subset)
     final_epoch = max(epochs)
     final_embeddings = embeddings_by_epoch[final_epoch]["embeddings"]
 
+    # Use anchor indices for fitting (clipped to final epoch size)
+    fit_indices = anchor_indices[anchor_indices < len(final_embeddings)]
+    if len(fit_indices) < len(anchor_indices):
+        warnings.warn(
+            f"Final epoch has fewer samples ({len(final_embeddings)}) than anchor set "
+            f"({len(anchor_indices)}). Using {len(fit_indices)} points for projection fit.",
+            UserWarning
+        )
+    fit_embeddings = final_embeddings[fit_indices]
+
     print(f"\n  Fitting {config.gif_method.value.upper()} projector on epoch {final_epoch}...")
+    print(f"    Using {len(fit_embeddings)} anchor points for projection")
     projector = Projector(
         method=config.gif_method,
         random_state=random_state,
-        max_samples_for_fit=config.gif_max_points,
+        max_samples_for_fit=len(fit_embeddings),  # Use all anchor points
     )
-    projector.fit(final_embeddings)
+    projector.fit(fit_embeddings)
 
     # Print projection info
     proj_info = projector.get_info()
@@ -100,51 +176,81 @@ def generate_training_gif(
             print(f"    PC1: {projector.explained_variance_ratio[0]:.1%}")
             print(f"    PC2: {projector.explained_variance_ratio[1]:.1%}")
 
-    # Sanity check: verify embeddings change across epochs
-    sanity_check = _check_embedding_changes(embeddings_by_epoch, epochs)
+    # Sanity check: verify embeddings change across epochs (using anchors)
+    sanity_check = _check_embedding_changes_anchored(
+        embeddings_by_epoch, epochs, anchor_indices
+    )
     if sanity_check.get("warning"):
         print(f"\n  WARNING: {sanity_check['warning']}")
 
-    # Generate frames
-    print(f"\n  Generating {len(epochs)} frames...")
+    # Generate frames using anchor-based tracking
+    print(f"\n  Generating {len(epochs)} frames (tracking {anchor_count} anchor points)...")
     frame_paths = []
+    skipped_epochs = []
 
-    for i, epoch in enumerate(epochs):
+    # Pre-compute all 2D projections to determine global axis limits
+    # This ensures consistent frame sizes for GIF animation
+    projected_data = []
+    for epoch in epochs:
         epoch_data = embeddings_by_epoch[epoch]
         embeddings = epoch_data["embeddings"]
         epoch_labels = epoch_data.get("labels", labels)
 
-        # Subsample if needed
-        if len(embeddings) > config.gif_max_points:
-            indices = np.random.choice(
-                len(embeddings),
-                config.gif_max_points,
-                replace=False
-            )
-            embeddings = embeddings[indices]
-            epoch_labels = epoch_labels[indices]
+        valid_indices = anchor_indices[anchor_indices < len(embeddings)]
 
-        # Project to 2D
-        embeddings_2d = projector.transform(embeddings)
+        if len(valid_indices) < anchor_count * 0.5:
+            projected_data.append(None)  # Will be skipped
+            continue
+
+        embeddings_anchored = embeddings[valid_indices]
+        labels_anchored = epoch_labels[valid_indices] if len(epoch_labels) > max(valid_indices) else epoch_labels[:len(valid_indices)]
+        embeddings_2d = projector.transform(embeddings_anchored)
+        projected_data.append((embeddings_2d, labels_anchored, epoch))
+
+    # Compute global axis limits from all projected data
+    all_2d = np.concatenate([d[0] for d in projected_data if d is not None], axis=0)
+    x_min, x_max = all_2d[:, 0].min(), all_2d[:, 0].max()
+    y_min, y_max = all_2d[:, 1].min(), all_2d[:, 1].max()
+    # Add 5% padding
+    x_pad = (x_max - x_min) * 0.05
+    y_pad = (y_max - y_min) * 0.05
+    axis_limits = (x_min - x_pad, x_max + x_pad, y_min - y_pad, y_max + y_pad)
+
+    # Generate frames with consistent axis limits
+    for i, (epoch, data) in enumerate(zip(epochs, projected_data)):
+        if data is None:
+            warnings.warn(
+                f"Epoch {epoch} has insufficient anchor points. "
+                f"Skipping frame to maintain visualization consistency.",
+                UserWarning
+            )
+            skipped_epochs.append(epoch)
+            continue
+
+        embeddings_2d, labels_anchored, _ = data
 
         # Get metadata for overlay
         metadata = epoch_metadata.get(epoch, {}) if epoch_metadata else {}
 
-        # Generate frame
+        # Generate frame with global axis limits
         frame_path = _generate_frame(
             embeddings_2d=embeddings_2d,
-            labels=epoch_labels,
+            labels=labels_anchored,
             epoch=epoch,
             output_path=frames_dir / f"epoch_{epoch:04d}.png",
             config=config,
             metadata=metadata,
             proj_info=proj_info,
+            axis_limits=axis_limits,
         )
         frame_paths.append(frame_path)
 
         # Progress indicator
         if (i + 1) % 10 == 0 or i == len(epochs) - 1:
             print(f"    Frame {i+1}/{len(epochs)} complete")
+
+    if skipped_epochs:
+        print(f"\n  NOTE: Skipped {len(skipped_epochs)} epochs due to insufficient anchor coverage: {skipped_epochs}")
 
     # Stitch frames into GIF
     gif_path = output_dir / "training_dynamics.gif"
@@ -202,6 +308,7 @@ def generate_training_gif(
         "frame_paths": frame_paths,
         "projector_info": proj_info,
         "sanity_check": sanity_check,
+        "anchor_strategy": anchor_strategy,
         "n_epochs": len(epochs),
         "config": config.to_dict(),
     }
@@ -215,6 +322,7 @@ def _generate_frame(
     config: VizConfig,
     metadata: Dict[str, Any],
     proj_info: Dict[str, Any],
+    axis_limits: Optional[Tuple[float, float, float, float]] = None,
 ) -> Path:
     """
     Generate a single frame image.
@@ -227,6 +335,7 @@ def _generate_frame(
         config: Visualization config
         metadata: Per-epoch metadata (loss, accuracy, etc.)
         proj_info: Projection information
+        axis_limits: Optional (x_min, x_max, y_min, y_max) for consistent frame sizes
 
     Returns:
         Path to saved frame
@@ -260,6 +369,11 @@ def _generate_frame(
     method_name = proj_info.get('method', 'projection').upper()
     ax.set_xlabel(f"{method_name} 1", fontsize=11)
     ax.set_ylabel(f"{method_name} 2", fontsize=11)
+
+    # Apply consistent axis limits for animated GIF (ensures same frame size)
+    if axis_limits is not None:
+        ax.set_xlim(axis_limits[0], axis_limits[1])
+        ax.set_ylim(axis_limits[2], axis_limits[3])
 
     # Title with epoch
     title = f"Epoch {epoch}"
@@ -448,6 +562,81 @@ def _check_embedding_changes(
         "relative_change": float(relative_change),
         "first_epoch": first_epoch,
         "last_epoch": last_epoch,
+        "warning": (
+            "Embeddings appear unchanged across epochs! "
+            "This may indicate a training issue."
+            if is_unchanged else None
+        ),
+    }
+
+
+def _check_embedding_changes_anchored(
+    embeddings_by_epoch: Dict[int, Dict[str, np.ndarray]],
+    epochs: List[int],
+    anchor_indices: np.ndarray,
+) -> Dict[str, Any]:
+    """
+    Sanity check: verify embeddings change across epochs using anchor points.
+
+    This version uses the same anchor indices for consistent comparison,
+    which is essential when per-epoch embedding counts differ.
+
+    Args:
+        embeddings_by_epoch: Dict mapping epoch -> {'embeddings': array, 'labels': array}
+        epochs: Sorted list of epoch numbers
+        anchor_indices: Fixed indices to track across epochs
+
+    Returns:
+        Dict with change analysis:
+        - changed: bool indicating if embeddings changed significantly
+        - mean_absolute_change: average absolute difference
+        - relative_change: change relative to embedding magnitude
+        - first_epoch, last_epoch: epochs compared
+        - anchor_count: number of anchor points used
+        - warning: optional warning message
+    """
+    if len(epochs) < 2:
+        return {"changed": True, "message": "Insufficient epochs for comparison"}
+
+    first_epoch = min(epochs)
+    last_epoch = max(epochs)
+
+    first_emb = embeddings_by_epoch[first_epoch]["embeddings"]
+    last_emb = embeddings_by_epoch[last_epoch]["embeddings"]
+
+    # Use anchor indices that are valid for BOTH epochs
+    valid_first = anchor_indices[anchor_indices < len(first_emb)]
+    valid_last = anchor_indices[anchor_indices < len(last_emb)]
+    valid_both = np.intersect1d(valid_first, valid_last)
+
+    if len(valid_both) == 0:
+        return {
+            "changed": True,
+            "warning": "No common anchor points between first and last epoch",
+            "anchor_count": 0,
+            "first_epoch": first_epoch,
+            "last_epoch": last_epoch,
+        }
+
+    # Extract anchor embeddings
+    first_anchored = first_emb[valid_both]
+    last_anchored = last_emb[valid_both]
+
+    # Compute change metrics
+    diff = np.abs(first_anchored - last_anchored)
+    mean_change = np.mean(diff)
+    relative_change = mean_change / (np.mean(np.abs(first_anchored)) + 1e-10)
+
+    # Check if embeddings are essentially unchanged
+    is_unchanged = relative_change < 0.01  # Less than 1% change
+
+    return {
+        "changed": not is_unchanged,
+        "mean_absolute_change": float(mean_change),
+        "relative_change": float(relative_change),
+        "first_epoch": first_epoch,
+        "last_epoch": last_epoch,
+        "anchor_count": len(valid_both),
         "warning": (
             "Embeddings appear unchanged across epochs! "
             "This may indicate a training issue."
