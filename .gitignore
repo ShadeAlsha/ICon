@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Virtual environments
+.venv/
+venv/
+
+# Data & outputs
+data/
+checkpoints/
+playground_runs/
+self_check_output/
+
+# OS junk
+.DS_Store
+
+# Test artifacts
+.pytest_cache/
+
+# Logs
+*.log
+
+.DS_Store
