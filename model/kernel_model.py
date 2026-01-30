@@ -7,6 +7,12 @@ from .losses import KernelLoss
 from .ema import EMAUpdater
 from .model_config import Config
 from .metrics import UnsupervisedAccuracy, Accuracy
+import sys
+import os
+
+# Add playground to path for divergence functions
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from playground.divergences import get_divergence_fn
 
 class Model(pl.LightningModule):
     def __init__(self, config: Config):
@@ -33,6 +39,9 @@ class Model(pl.LightningModule):
             if self.config.linear_probe else nn.Identity()
         )
 
+        # Use divergence from config (kl, rkl, js) - this replaces the old loss_type
+        self.divergence_fn = get_divergence_fn(self.config.divergence)
+        # Keep old loss function for backward compatibility with non-playground code
         self.kl_divergence = KernelLoss.get_loss_fn(self.config.loss_type)
 
     def _setup_metrics(self):
@@ -49,14 +58,94 @@ class Model(pl.LightningModule):
         self.automatic_optimization = not self.config.use_mixed_precision
 
     def _compute_loss(self, batch) -> Dict[str, Any]:
-        supervisory_distribution = self.supervisory_distribution(batch)
-        mapper_output = self.mapper(batch) #dictionary
-        batch.update(mapper_output)
-        learned_distribution = self.learned_distribution(batch, return_log=self.config.log_icon_loss)
-        embeddings = batch.get('embedding', None) 
-        
+        # ================================================================
+        # INVARIANT ENFORCEMENT: All I-Con objectives operate on (B, D) only
+        # ================================================================
+
+        # Step 1: Compute supervisory distribution p
+        p = self.supervisory_distribution(batch)
+
+        # Step 2: Run mapper to get embeddings
+        mapper_output = self.mapper(batch)
+
+        # Step 3: CANONICAL EMBEDDING EXTRACTION
+        # Only batch["embedding"] is allowed for learned_distribution
+        # Block any alternative tensor paths that could leak feature maps
+        _FORBIDDEN_KEYS = ('features', 'feature_maps', 'representation', 'backbone_output')
+        for forbidden_key in _FORBIDDEN_KEYS:
+            if forbidden_key in mapper_output:
+                raise ValueError(
+                    f"Mapper returned forbidden key '{forbidden_key}'. "
+                    f"I-Con objectives require 'embedding' key with shape (B, D). "
+                    f"Raw backbone feature maps must not reach learned_distribution."
+                )
+
+        if 'embedding' not in mapper_output:
+            raise ValueError(
+                f"Mapper must return 'embedding' key. Got keys: {list(mapper_output.keys())}. "
+                f"Ensure your backbone has a projection head that outputs (B, D) embeddings."
+            )
+
+        z = mapper_output['embedding']
+
+        # Step 4: CANONICAL FLATTEN - exactly once, here only
+        if z.dim() > 2:
+            B = z.size(0)
+            z = z.view(B, -1)
+
+        # Step 5: HARD INVARIANT CHECK - fail fast if violated
+        if z.dim() != 2:
+            raise ValueError(
+                f"I-Con INVARIANT VIOLATED: embeddings must be 2D (B, D).\n"
+                f"  Got: {z.dim()}D tensor with shape {z.shape}\n"
+                f"  Key: 'embedding'\n"
+                f"  Expected: (batch_size, embedding_dim)\n"
+                f"Ensure projection head outputs are used, not backbone feature maps."
+            )
+
+        # Step 6: Store canonical embedding in batch
+        batch['embedding'] = z
+
+        # Step 7: Compute learned distribution q
+        q = self.learned_distribution(batch, return_log=self.config.log_icon_loss)
+
+        # Step 8: SHAPE INVARIANT CHECK - p and q must both be (B, B)
+        if p.shape != q.shape:
+            raise ValueError(
+                f"I-Con INVARIANT VIOLATED: p.shape != q.shape\n"
+                f"  p.shape = {p.shape}\n"
+                f"  q.shape = {q.shape}\n"
+                f"  embedding.shape = {z.shape}\n"
+                f"This indicates learned_distribution received wrong tensor. "
+                f"Check that learned_distribution.input_key == 'embedding'."
+            )
+
+        B = z.size(0)
+        if p.shape != (B, B):
+            raise ValueError(
+                f"I-Con INVARIANT VIOLATED: distributions must have shape (B, B).\n"
+                f"  Expected: ({B}, {B})\n"
+                f"  p.shape = {p.shape}\n"
+                f"  q.shape = {q.shape}\n"
+                f"This indicates feature-level instead of instance-level similarities."
+            )
+
+        # Debug output (enabled via config.debug_shapes if available)
+        if getattr(self.config, 'debug_shapes', False):
+            print(f"[DEBUG SHAPES] embedding: {z.shape}, p: {p.shape}, q: {q.shape}")
+
+        embeddings = z
+        supervisory_distribution = p
+        learned_distribution = q
+
+        # Use divergence function from playground if available, otherwise fall back to old loss
+        if hasattr(self, 'divergence_fn'):
+            icon_loss = self.divergence_fn(supervisory_distribution, learned_distribution, log_q=self.config.log_icon_loss)
+        else:
+            icon_loss = self.kl_divergence(supervisory_distribution, learned_distribution, log=self.config.log_icon_loss)
+
         losses = {
-            'icon_loss': self.kl_divergence(supervisory_distribution, learned_distribution, log=self.config.log_icon_loss),
+            'icon_loss': icon_loss,
             'linear_probe_loss': self._compute_linear_probe_loss(embeddings.detach(), batch.get('label', None))
         }
 

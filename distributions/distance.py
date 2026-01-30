@@ -23,6 +23,14 @@ class DistanceKernel(Kernel):
             x1, x2 = features
         else:
             x1 = x2 = features
+
+        # Validate: embeddings must be 2D (B, D) - flatten should happen upstream
+        # in Model._compute_loss before calling learned_distribution
+        if x1.dim() != 2 or x2.dim() != 2:
+            raise ValueError(
+                f"DistanceKernel requires 2D tensors (B, D), got shapes {x1.shape} and {x2.shape}. "
+                f"Ensure embeddings are flattened before computing distances."
+            )
         
         # Compute distances based on metric
         if self.metric == 'euclidean':

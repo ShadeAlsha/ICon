@@ -17,6 +17,7 @@ class Config:
     use_ema: bool = False
     ema_momentum: float = 0.999
     loss_type: str = 'ce'
+    divergence: str = 'kl'
     decay_factor: float = 0.9
     linear_probe: bool = False
     optimizer: str = 'adamw'
@@ -67,6 +68,7 @@ class Config:
             'lr': self.lr,
             'optimizer': self.optimizer,
             'loss_type': self.loss_type,
+            'divergence': self.divergence,
             'weight_decay': self.weight_decay,
             'ema_momentum': self.ema_momentum,
             'linear_probe': self.linear_probe,

@@ -132,9 +132,72 @@ learned_distribution=Gaussian(...)        # SimCLR
 supervisory_distribution=StudentT(...)    # t-SimCLR
 ```
 
+## Hardware Acceleration Support
+
+I-Con Playground provides robust GPU support across different hardware configurations:
+
+### Supported Devices
+
+- **CPU**: Works on any machine (default fallback)
+- **CUDA GPUs**: NVIDIA GPUs on local machines, Google Colab, or lab clusters
+- **Apple Silicon (MPS)**: M1/M2/M3 Macs with hardware acceleration
+
+### Device Selection
+
+The playground automatically selects the best available device, but you can override:
+
+```bash
+# Automatic selection (CUDA > MPS > CPU)
+python -m playground.playground_cli --device auto
+
+# Force specific device
+python -m playground.playground_cli --device cuda   # Require CUDA
+python -m playground.playground_cli --device mps    # Require Apple Silicon
+python -m playground.playground_cli --device cpu    # Force CPU
+```
+
+### Verifying GPU Usage
+
+When training starts, you'll see a clear device indicator:
+
+```
+Using device: cuda
+  GPU: Tesla V100-SXM2-32GB
+```
+
+To confirm GPU usage on a cluster:
+1. Check the log shows "Using device: cuda"
+2. Run `nvidia-smi` in another terminal
+3. Look for python process using GPU memory
+
+For Apple Silicon:
+1. Check the log shows "Using device: mps"
+2. Open Activity Monitor > Window > GPU History
+3. Look for python process using GPU
+
+### Requirements
+
+- **CUDA**: PyTorch with CUDA support ([installation guide](https://pytorch.org/get-started/locally/))
+- **MPS**: macOS 12.3+ with Apple Silicon, PyTorch 1.12+
+- **CPU**: Works out of the box
+
+The playground handles pin_memory and other device-specific optimizations automatically.
+
 ## Resources
 
 - [Complete Notebook](Visualization.ipynb) - Many methods with visualizations
+
+## Observed Limitations
+
+When using I-Con for representation learning experiments, be aware of these known limitations:
+
+- **Small datasets encourage nuisance-factor dominance**: With limited data, models may latch onto spurious correlations (background textures, image borders, lighting conditions) rather than semantic content.
+
+- **Unsupervised contrastive objectives do not guarantee alignment with semantic class labels**: Methods like SimCLR learn invariances from data augmentations, not class structure. High embedding similarity does not necessarily mean same-class membership.
+
+- **PCA separation does not imply linear separability**: Visual clustering in 2D PCA plots can be misleading. Always validate with probe accuracies (linear probe, k-NN) to assess true separability.
+
+These are intrinsic properties of unsupervised contrastive learning, not implementation issues. Understanding these limitations is crucial for interpreting experimental results correctly.
 
 ## Citation
 
