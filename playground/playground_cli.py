@@ -1044,7 +1044,10 @@ def run_experiment(args: argparse.Namespace) -> None:
     if not args.no_viz:
         print(f"\n  Visualizations:")
         print(f"    training_curves.png  - Loss/accuracy over epochs")
-        print(f"    embeddings_{method}.png - 2D embedding plot")
+        print(f"    embeddings_pca.png   - 2D embedding plot (linear)")
+        print(f"    embeddings_umap.png  - 2D embedding plot (nonlinear)")
+        if args.tsne:
+            print(f"    embeddings_tsne.png  - 2D embedding plot (t-SNE)")
         print(f"    distance_histograms.png")
 
     # Check if GIF was generated
