@@ -386,7 +386,7 @@ def get_custom_dataloaders(
         val_dataset,
         batch_size=batch_size,
         shuffle=False,
-        drop_last=True,
+        drop_last=False,  # Allow partial batches for validation/embedding collection
         **dataloader_kwargs,
     )
 

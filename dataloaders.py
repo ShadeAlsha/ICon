@@ -172,7 +172,7 @@ def get_dataloaders(
         test_dataset_wrapped,
         batch_size=batch_size // num_views,
         shuffle=shuffle_test,
-        drop_last=True,
+        drop_last=False,  # Allow partial batches for validation/embedding collection
         **dataloader_kwargs,
     )
 

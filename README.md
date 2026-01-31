@@ -1,3 +1,5 @@
+built some cool stuff w/ MIT people
+
 <div align="center">
 
 # I-Con: A Unifying Framework for Representation Learning
