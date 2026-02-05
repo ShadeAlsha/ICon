@@ -185,18 +185,6 @@ The playground handles pin_memory and other device-specific optimizations automa
 
 - [Complete Notebook](Visualization.ipynb) - Many methods with visualizations
 
-## Observed Limitations
-
-When using I-Con for representation learning experiments, be aware of these known limitations:
-
-- **Small datasets encourage nuisance-factor dominance**: With limited data, models may latch onto spurious correlations (background textures, image borders, lighting conditions) rather than semantic content.
-
-- **Unsupervised contrastive objectives do not guarantee alignment with semantic class labels**: Methods like SimCLR learn invariances from data augmentations, not class structure. High embedding similarity does not necessarily mean same-class membership.
-
-- **PCA separation does not imply linear separability**: Visual clustering in 2D PCA plots can be misleading. Always validate with probe accuracies (linear probe, k-NN) to assess true separability.
-
-These are intrinsic properties of unsupervised contrastive learning, not implementation issues. Understanding these limitations is crucial for interpreting experimental results correctly.
-
 ## Citation
 
 ```bibtex
@@ -211,3 +199,4 @@ These are intrinsic properties of unsupervised contrastive learning, not impleme
 ## Contact
 
 Questions? Contact [Shaden Alshammari](mailto:shaden@mit.edu)
+CLI Playground is built by [Siddharth Manne](mailto:mannesidd@gmail.com).For more details, see [this document](https://docs.google.com/document/d/17_T8g84FppfSUDfr_bBV7X5j_rq1Twlb-2yr6PQ73Dc/edit?pli=1&tab=t.0)
